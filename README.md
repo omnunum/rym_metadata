@@ -69,13 +69,33 @@ beet rym --force album:"in rainbows"
 
 ## Configuration Options
 
+### Bright Data API Version
 | Option | Default | Description |
 |--------|---------|-------------|
 | `brightdata_token` | None | Bright Data API token (can also use BRIGHTDATA_TOKEN env var) |
 | `max_retries` | 3 | Maximum number of retry attempts for failed requests |
 | `retry_delay` | 2.0 | Base delay between retries in seconds (uses exponential backoff) |
 | `concurrent_requests` | 5 | Maximum number of concurrent requests to RYM |
-| `request_timeout` | 30 | Request timeout in seconds |
+| `request_timeout` | 60 | Request timeout in seconds |
+
+### Camoufox Version (Recommended)
+| Option | Default | Description |
+|--------|---------|-------------|
+| `brightdata_user` | None | Bright Data proxy username (can also use BRIGHTDATA_USER env var) |
+| `brightdata_pass` | None | Bright Data proxy password (can also use BRIGHTDATA_PASS env var) |
+| `brightdata_endpoint` | See config | Bright Data proxy endpoint (must use port 33335 for new cert) |
+| `proxy_cert_path` | None | Path to SSL certificate file (optional, can also use PROXY_CERT_PATH env var) |
+| `session_type` | 'sticky' | Session control: 'sticky', 'rotate', or 'const' |
+| `session_duration` | 600 | Session duration in seconds (for sticky sessions) |
+| `max_retries` | 3 | Maximum number of retry attempts for failed requests |
+| `retry_delay` | 2.0 | Base delay between retries in seconds |
+| `concurrent_requests` | 2 | Maximum number of concurrent browser instances |
+| `page_timeout` | 30000 | Page load timeout in milliseconds |
+
+### Session Types
+- **`sticky`**: Maintains same IP for configured duration, then rotates (recommended for CF bypass)
+- **`rotate`**: Gets new IP for each request (use sparingly, may trigger more CF challenges)
+- **`const`**: Uses same peer consistently (may fail if peer unavailable)
 
 ## How It Works
 
