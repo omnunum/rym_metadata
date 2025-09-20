@@ -1,0 +1,5 @@
+aiohttp>=3.8.0
+beautifulsoup4>=4.11.0
+beets>=1.6.0
+cloudscraper>=1.2.60
+aiohttp-socks>=0.8.0
