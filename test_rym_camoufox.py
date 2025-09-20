@@ -1,39 +1,35 @@
 #!/usr/bin/env python3
 
-import os
 import asyncio
 import logging
 from beetsplug_rym_camoufox import RYMCamoufoxPlugin
 from camoufox import AsyncCamoufox
+from rym.search import RYMSearchEngine
 
 async def test_album_async():
     """Test fetching genre info for a single album using AsyncCamoufox."""
 
-    # Set environment variables before importing plugin
-    os.environ['BRIGHTDATA_USER'] = "brd-customer-hl_9c0cc071-zone-residential_proxy1"
-    os.environ['BRIGHTDATA_PASS'] = "6ctcxp8tk57x"
-
-    # Enable debug logging
-    logging.basicConfig(level=logging.DEBUG)
+    # Enable info level logging (use DEBUG for more verbose resource blocking logs)
+    logging.basicConfig(level=logging.INFO)
 
     plugin = RYMCamoufoxPlugin()
-    plugin._log.setLevel(logging.DEBUG)
+    plugin._log.setLevel(logging.INFO)
 
     # Test with a well-known album
     artist = "Kollektiv Turmstrasse"
     album = "Musik Gewinnt Freunde Collection"
-    year = 2013  
+    year = 2013
 
     print(f"Testing: {artist} - {album}")
 
     # Check credentials
-    if not (plugin.proxy_user and plugin.proxy_pass):
+    if not plugin.proxy_config.is_valid:
         print("Warning: No proxy credentials found")
-        print("Set PROXY_HOST, PROXY_USERNAME, and PROXY_PASSWORD environment variables")
+        print("Configure proxy settings in beets config: proxy_host, proxy_port, proxy_username, proxy_password")
 
     try:
         # Get browser options and create browser
-        browser_options = plugin._get_browser_options()
+        browser_options = plugin.browser_manager.get_browser_options()
         print("Browser options created successfully")
 
         async with AsyncCamoufox(**browser_options) as browser:
@@ -42,26 +38,33 @@ async def test_album_async():
             print("Browser page created successfully")
 
             # Build direct URL
-            direct_url = plugin._build_direct_url(artist, album)
+            direct_url = plugin.scraper.build_direct_url(artist, album)
             print(f"Direct URL: {direct_url}")
 
             # Extract genres using new async method
-            genres = await plugin._extract_genres_from_url_async(direct_url, page)
+            genre_data = await plugin.scraper.extract_genres_from_url(direct_url, page)
+            genres = genre_data.get('genres', [])
+            descriptors = genre_data.get('descriptors', [])
             print(f"Genres: {genres}")
+            print(f"Descriptors: {descriptors}")
 
             # Test search fallback if direct failed
             if not genres:
                 print("Direct URL failed, trying search...")
-                search_url = plugin._build_search_url(artist, album)
+                search_url = plugin.scraper.build_search_url(artist, album)
                 print(f"Search URL: {search_url}")
 
-                # Add year parameter for testing (realistic year for electronic music)
-                album_url = await plugin._search_album_url_async(search_url, page, artist, album, year)
+                # Create search engine and test search
+                search_engine = RYMSearchEngine(plugin.scraper)
+                album_url = await search_engine.search_album_url(search_url, page, artist, album, year)
                 print(f"Found album URL: {album_url}")
 
                 if album_url:
-                    genres = await plugin._extract_genres_from_url_async(album_url, page)
+                    genre_data = await plugin.scraper.extract_genres_from_url(album_url, page)
+                    genres = genre_data.get('genres', [])
+                    descriptors = genre_data.get('descriptors', [])
                     print(f"Genres from search: {genres}")
+                    print(f"Descriptors from search: {descriptors}")
 
     except Exception as e:
         print(f"Error: {e}")
