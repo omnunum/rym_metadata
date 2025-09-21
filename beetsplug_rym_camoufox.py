@@ -16,7 +16,6 @@ from rym.session_manager import ProxySessionManager
 from rym.cache_manager import HtmlCacheManager
 from rym.browser import BrowserManager
 from rym.scraper import RYMScraper
-from rym.config import ProxyConfig
 
 
 class RYMCamoufoxPlugin(plugins.BeetsPlugin):
@@ -61,10 +60,14 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
 
             # Resource blocking settings for bandwidth optimization
             'resource_blocking_enabled': True,  # Enable targeted resource blocking (blocks e.snmc.io and asset paths)
+
+            # Search matching settings
+            'matching_threshold': 0.8,  # Minimum similarity score (0.0-1.0) for accepting matches
         })
 
-        # Create proxy configuration
-        self.proxy_config = ProxyConfig.from_beets_config(self.config)
+        # Create unified configuration
+        from rym.core import RYMConfig
+        self.rym_config = RYMConfig.from_beets_config(self.config)
 
         # Initialize components
         self._init_session_manager()
@@ -73,39 +76,57 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
         self._init_scraper()
 
         # Validate proxy configuration
-        if self.proxy_config.enabled and not self.proxy_config.is_valid:
+        if self.rym_config.proxy_enabled and not self.rym_config.is_proxy_valid:
             self._log.warning("Proxy enabled but missing credentials. Check proxy_host, proxy_port, proxy_username, and proxy_password settings.")
+
+        # Register event listeners for auto-tagging
+        if self.config['auto_tag'].get():
+            self.register_listener('album_imported', self.album_imported_listener)
 
     def _init_session_manager(self):
         """Initialize proxy session manager."""
         self.session_manager = None
-        if self.proxy_config.enabled and self.proxy_config.has_server:
-            self.session_manager = ProxySessionManager(self.proxy_config)
+        if self.rym_config.proxy_enabled and self.rym_config.has_proxy_server:
+            self.session_manager = ProxySessionManager(self.rym_config)
 
     def _init_cache_manager(self):
         """Initialize HTML cache manager."""
         self.cache_manager = None
-        if self.config['cache_enabled'].get():
-            cache_dir = self.config['cache_dir'].get()
-            cache_expiry = self.config['cache_expiry_days'].get()
-            self.cache_manager = HtmlCacheManager(cache_dir, cache_expiry)
+        if self.rym_config.cache_enabled:
+            self.cache_manager = HtmlCacheManager(
+                self.rym_config.cache_dir,
+                self.rym_config.cache_expiry_days
+            )
             # Clean up expired cache on startup
-            if cache_expiry > 0:
+            if self.rym_config.cache_expiry_days > 0:
                 self.cache_manager.cleanup_expired()
 
     def _init_browser_manager(self):
         """Initialize browser manager."""
-        self.browser_manager = BrowserManager(self.config, self.proxy_config, self.session_manager)
+        self.browser_manager = BrowserManager(self.rym_config, self.session_manager)
 
     def _init_scraper(self):
         """Initialize RYM scraper."""
         self.scraper = RYMScraper(
-            self.config,
-            self.proxy_config,
+            self.rym_config,
             self.cache_manager,
             self.session_manager,
             self.browser_manager
         )
+
+    def album_imported_listener(self, session, task):
+        """Auto-tag albums when they are imported."""
+        # Note: session parameter is required by beets but not used
+        if task.is_album and hasattr(task, 'album') and task.album:
+            album = task.album
+            # Only process if we don't already have RYM genres or if force is enabled
+            if not album.get('genres'):
+                self._log.info(f"Auto-tagging imported album: {album.albumartist} - {album.album}")
+                try:
+                    # Process the album asynchronously
+                    self._process_albums([album], force=False, dry_run=False)
+                except Exception as e:
+                    self._log.error(f"Error auto-tagging album {album.albumartist} - {album.album}: {e}")
 
     def commands(self):
         """Register the rym command."""
@@ -151,7 +172,7 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
                 ui.print_("Cache is disabled")
             return
 
-        if self.proxy_config.enabled and not self.proxy_config.is_valid:
+        if self.rym_config.proxy_enabled and not self.rym_config.is_proxy_valid:
             ui.print_("Error: No proxy credentials configured")
             return
 
@@ -175,7 +196,7 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
         # Filter albums that need processing
         albums_to_process = []
         for album in albums:
-            if force or not album.get('rym_genres'):
+            if force or not album.get('genres'):
                 albums_to_process.append(album)
             else:
                 ui.print_(f"Skipping {album.albumartist} - {album.album} (already has RYM genres)")

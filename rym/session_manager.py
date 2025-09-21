@@ -4,16 +4,15 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-from .config import ProxyConfig
 
 
 class ProxySessionManager:
     """Manages proxy sessions, cookies, and port rotation for efficient scraping."""
 
-    def __init__(self, proxy_config: ProxyConfig, state_file: str = None):
-        self.proxy_config = proxy_config
+    def __init__(self, config: Any, state_file: Optional[str] = None) -> None:
+        self.config = config
         # Save state file in current working directory
         self.state_file = Path(state_file or '.rym_session_state.json')
         self.logger = logging.getLogger(__name__)
@@ -34,8 +33,8 @@ class ProxySessionManager:
 
         # Create new state
         return {
-            'current_port': self.proxy_config.port_range_start,
-            'port_range': {'min': self.proxy_config.port_range_start, 'max': self.proxy_config.port_range_end},
+            'current_port': self.config.port_range_start,
+            'port_range': {'min': self.config.port_range_start, 'max': self.config.port_range_end},
             'cookies': {},
             'session_start_time': None,
             'request_count': 0,
@@ -44,7 +43,7 @@ class ProxySessionManager:
             'challenge_solved': False
         }
 
-    def _save_state(self):
+    def _save_state(self) -> None:
         """Save current state to file."""
         try:
             with open(self.state_file, 'w') as f:
@@ -63,7 +62,7 @@ class ProxySessionManager:
         blocked_ports = set(self.state['blocked_ports'])
 
         # Find next available port
-        for port in range(current_port + 1, self.proxy_config.port_range_end + 1):
+        for port in range(current_port + 1, self.config.port_range_end + 1):
             if port not in blocked_ports:
                 self.state['current_port'] = port
                 self.state['cookies'] = {}  # Clear cookies for new IP
@@ -76,7 +75,7 @@ class ProxySessionManager:
         self.logger.error("No more ports available in range")
         return False
 
-    def mark_port_blocked(self, port: int = None):
+    def mark_port_blocked(self, port: Optional[int] = None) -> None:
         """Mark a port as blocked."""
         port = port or self.state['current_port']
         if port not in self.state['blocked_ports']:
@@ -84,7 +83,7 @@ class ProxySessionManager:
             self._save_state()
             self.logger.warning(f"Marked port {port} as blocked")
 
-    def set_cookies(self, cookies: Dict[str, str]):
+    def set_cookies(self, cookies: Dict[str, str]) -> None:
         """Save cookies from successful challenge solve."""
         self.state['cookies'] = cookies
         self.state['challenge_solved'] = True
@@ -115,13 +114,13 @@ class ProxySessionManager:
 
         return True
 
-    def increment_request_count(self):
+    def increment_request_count(self) -> None:
         """Increment request counter."""
         self.state['request_count'] = self.state.get('request_count', 0) + 1
         self.state['last_success_time'] = datetime.now().isoformat()
         self._save_state()
 
-    def reset_session(self):
+    def reset_session(self) -> None:
         """Reset current session (e.g., when blocked)."""
         self.state['cookies'] = {}
         self.state['challenge_solved'] = False

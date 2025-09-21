@@ -4,7 +4,7 @@ import json
 import pytest
 from pathlib import Path
 from unittest.mock import Mock
-from rym.config import ProxyConfig
+from rym.core import RYMConfig
 from rym.cache_manager import HtmlCacheManager
 
 
@@ -39,15 +39,15 @@ def temp_cache_dir(tmp_path):
 
 
 @pytest.fixture
-def mock_proxy_config():
-    """Create mock proxy configuration for testing."""
-    return ProxyConfig(
-        enabled=True,
-        host="proxy.example.com",
-        port=8080,
-        username="testuser",
-        password="testpass",
-        use_tls=False,
+def mock_rym_config():
+    """Create mock RYM configuration for testing."""
+    return RYMConfig(
+        proxy_enabled=True,
+        proxy_host="proxy.example.com",
+        proxy_port=8080,
+        proxy_username="testuser",
+        proxy_password="testpass",
+        proxy_use_tls=False,
         session_type="none",
         session_duration=600,
         session_id_length=10,

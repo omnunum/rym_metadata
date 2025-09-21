@@ -3,27 +3,31 @@
 import pytest
 from unittest.mock import AsyncMock, Mock
 from bs4 import BeautifulSoup
-from rym.search import RYMSearchEngine
+from rym.scraper import RYMScraper
 
 
 class TestRYMSearchEngine:
-    """Test suite for RYMSearchEngine."""
+    """Test suite for RYM search functionality integrated into RYMScraper."""
 
     @pytest.fixture
-    def mock_scraper(self):
-        """Create mock scraper for search engine."""
-        scraper = Mock()
+    def mock_config(self):
+        """Create mock config for scraper."""
+        config = Mock()
+        config.matching_threshold = 0.8
+        config.max_retries = 3
+        config.retry_delay = 1
+        return config
+
+    @pytest.fixture
+    def scraper(self, mock_config):
+        """Create scraper instance with mock config."""
+        scraper = RYMScraper(mock_config)
         scraper.fetch_url_with_retry = AsyncMock()
         return scraper
 
-    @pytest.fixture
-    def search_engine(self, mock_scraper):
-        """Create search engine instance with mock scraper."""
-        return RYMSearchEngine(mock_scraper)
-
-    def test_string_similarity_exact_match(self, search_engine):
+    def test_string_similarity_exact_match(self, scraper):
         """Test string similarity with exact matches."""
-        score = search_engine._calculate_match_score(
+        score = scraper._calculate_match_score(
             {'artist': 'Radiohead', 'album': 'OK Computer', 'year': 1997},
             'Radiohead',
             'OK Computer',
@@ -31,9 +35,9 @@ class TestRYMSearchEngine:
         )
         assert score == 1.0
 
-    def test_string_similarity_case_insensitive(self, search_engine):
+    def test_string_similarity_case_insensitive(self, scraper):
         """Test string similarity is case insensitive."""
-        score = search_engine._calculate_match_score(
+        score = scraper._calculate_match_score(
             {'artist': 'radiohead', 'album': 'ok computer', 'year': 1997},
             'Radiohead',
             'OK Computer',
@@ -42,9 +46,9 @@ class TestRYMSearchEngine:
         assert score == 1.0
 
 
-    def test_year_scoring_exact(self, search_engine):
+    def test_year_scoring_exact(self, scraper):
         """Test year scoring with exact match."""
-        score = search_engine._calculate_match_score(
+        score = scraper._calculate_match_score(
             {'artist': 'Test', 'album': 'Test', 'year': 2000},
             'Test',
             'Test',
@@ -54,9 +58,9 @@ class TestRYMSearchEngine:
         assert score == 1.0
 
 
-    def test_year_scoring_no_target_year(self, search_engine):
+    def test_year_scoring_no_target_year(self, scraper):
         """Test year scoring when no target year provided."""
-        score = search_engine._calculate_match_score(
+        score = scraper._calculate_match_score(
             {'artist': 'Test', 'album': 'Test', 'year': 2000},
             'Test',
             'Test',
@@ -65,9 +69,9 @@ class TestRYMSearchEngine:
         # Year component should be 1.0 (default)
         assert score == 1.0
 
-    def test_year_scoring_no_candidate_year(self, search_engine):
+    def test_year_scoring_no_candidate_year(self, scraper):
         """Test year scoring when candidate has no year."""
-        score = search_engine._calculate_match_score(
+        score = scraper._calculate_match_score(
             {'artist': 'Test', 'album': 'Test', 'year': None},
             'Test',
             'Test',
@@ -82,11 +86,11 @@ class TestRYMSearchEngine:
 
 
     @pytest.mark.asyncio
-    async def test_search_album_url_success(self, search_engine, mock_scraper, sample_search_html):
+    async def test_search_album_url_success(self, scraper, sample_search_html):
         """Test successful album URL search."""
-        mock_scraper.fetch_url_with_retry.return_value = sample_search_html
+        scraper.fetch_url_with_retry.return_value = sample_search_html
 
-        result = await search_engine.search_album_url(
+        result = await scraper._search_album_url(
             "http://example.com/search",
             Mock(),  # page mock
             "Kollektiv Turmstrasse",
@@ -100,7 +104,7 @@ class TestRYMSearchEngine:
 
 
     @pytest.mark.asyncio
-    async def test_search_album_url_best_match_selection(self, search_engine, mock_scraper):
+    async def test_search_album_url_best_match_selection(self, scraper):
         """Test that the best scoring match is selected."""
         html = '''
         <html>
@@ -126,9 +130,9 @@ class TestRYMSearchEngine:
         </body>
         </html>
         '''
-        mock_scraper.fetch_url_with_retry.return_value = html
+        scraper.fetch_url_with_retry.return_value = html
 
-        result = await search_engine.search_album_url(
+        result = await scraper._search_album_url(
             "http://example.com/search",
             Mock(),
             "Radiohead",
@@ -140,7 +144,7 @@ class TestRYMSearchEngine:
         assert result == "http://rateyourmusic.com/release/album/radiohead/ok-computer/"
 
     @pytest.mark.asyncio
-    async def test_search_album_url_real_cache_data(self, search_engine, mock_scraper, cache_fixtures_dir):
+    async def test_search_album_url_real_cache_data(self, scraper, cache_fixtures_dir):
         """Test search with real cached search results."""
         if not list(cache_fixtures_dir.glob("*.json")):
             pytest.skip("No cache fixtures available")
@@ -159,11 +163,11 @@ class TestRYMSearchEngine:
         if not search_cache:
             pytest.skip("No search cache fixtures available")
 
-        mock_scraper.fetch_url_with_retry.return_value = search_cache['html']
+        scraper.fetch_url_with_retry.return_value = search_cache['html']
 
         # Extract artist/album from the URL for testing
         # This is a basic test to ensure real data can be parsed
-        result = await search_engine.search_album_url(
+        result = await scraper._search_album_url(
             search_cache['url'],
             Mock(),
             "Kollektiv Turmstrasse",  # Using known artist from fixtures

@@ -5,19 +5,17 @@ import random
 import string
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 from camoufox_captcha import solve_captcha
 from .session_manager import ProxySessionManager
-from .config import ProxyConfig
 
 
 class BrowserManager:
     """Manages browser configuration, Cloudflare challenges, and resource blocking."""
 
-    def __init__(self, config, proxy_config: ProxyConfig, session_manager: Optional[ProxySessionManager] = None):
+    def __init__(self, config: Any, session_manager: Optional[ProxySessionManager] = None) -> None:
         self.config = config
-        self.proxy_config = proxy_config
         self.session_manager = session_manager
         self.logger = logging.getLogger(__name__)
 
@@ -32,7 +30,7 @@ class BrowserManager:
             'blocked_types': {}
         }
 
-    def get_browser_options(self, enable_resource_blocking: bool = False) -> dict:
+    def get_browser_options(self, enable_resource_blocking: bool = False) -> Dict[str, Any]:
         """Get Camoufox browser options with proxy configuration.
 
         Args:
@@ -40,16 +38,16 @@ class BrowserManager:
         """
         browser_proxy_config = None
 
-        if self.proxy_config.is_valid:
+        if self.config.is_proxy_valid:
             # Build username with session control (if supported by proxy service)
             username = self._build_proxy_username()
 
             browser_proxy_config = {
-                "server": self.proxy_config.server_url,
+                "server": self.config.server_url,
                 "username": username,
-                "password": self.proxy_config.password
+                "password": self.config.proxy_password
             }
-            self.logger.debug(f"Using proxy: {self.proxy_config.server_url}")
+            self.logger.debug(f"Using proxy: {self.config.server_url}")
             self.logger.debug(f"Proxy username: {username}")
             self.logger.debug("Proxy config created successfully")
 
@@ -74,17 +72,17 @@ class BrowserManager:
 
         # Certificate handling - Camoufox doesn't support ssl_cert parameter
         # For HTTPS proxies with custom certs, this would need to be handled differently
-        if self.proxy_config.cert_path and Path(self.proxy_config.cert_path).exists():
-            self.logger.debug("SSL certificate found: %s", self.proxy_config.cert_path)
+        if self.config.proxy_cert_path and Path(self.config.proxy_cert_path).exists():
+            self.logger.debug("SSL certificate found: %s", self.config.proxy_cert_path)
             self.logger.warning("Custom SSL certificates not directly supported by Camoufox - using system cert store")
-        elif self.proxy_config.cert_path:
-            self.logger.warning("Certificate path specified but file not found: %s", self.proxy_config.cert_path)
+        elif self.config.proxy_cert_path:
+            self.logger.warning("Certificate path specified but file not found: %s", self.config.proxy_cert_path)
 
         return browser_options
 
-    async def setup_resource_blocking(self, page):
+    async def setup_resource_blocking(self, page: Any) -> None:
         """Set up targeted resource blocking using domain/path blocklist."""
-        if not self.config['resource_blocking_enabled'].get():
+        if not self.config.resource_blocking_enabled:
             return
 
         # Define blocked domains/paths that are safe to block
@@ -151,7 +149,7 @@ class BrowserManager:
         blocked_domains_list = ', '.join(sorted(blocked_domains))
         self.logger.info(f"Set up targeted resource blocking. Blocking domains: {blocked_domains_list}")
 
-    def log_bandwidth_stats(self):
+    def log_bandwidth_stats(self) -> None:
         """Log bandwidth optimization statistics."""
         if self.bandwidth_stats['total_requests'] > 0:
             blocked_pct = (self.bandwidth_stats['blocked_requests'] / self.bandwidth_stats['total_requests']) * 100
@@ -163,7 +161,7 @@ class BrowserManager:
                     blocked_summary.append(f"{resource_type}: {count}")
                 self.logger.debug(f"Blocked by type: {', '.join(blocked_summary)}")
 
-    async def solve_cloudflare_challenge(self, page, url: str) -> bool:
+    async def solve_cloudflare_challenge(self, page: Any, url: str) -> bool:
         """Solve Cloudflare challenge using camoufox-captcha library."""
         try:
             self.logger.info(f"Attempting to solve Cloudflare challenge for {url}...")
@@ -192,7 +190,7 @@ class BrowserManager:
             self.logger.error(f"Error solving Cloudflare challenge: {e}")
             return False
 
-    async def _extract_cookies(self, page) -> Dict[str, str]:
+    async def _extract_cookies(self, page: Any) -> Dict[str, str]:
         """Extract cookies from async browser page."""
         try:
             cookies = {}
@@ -210,7 +208,7 @@ class BrowserManager:
             self.logger.error(f"Error extracting cookies: {e}")
             return {}
 
-    async def apply_session_cookies(self, page):
+    async def apply_session_cookies(self, page: Any) -> None:
         """Apply saved session cookies to the async page."""
         if not self.session_manager:
             return
@@ -237,18 +235,18 @@ class BrowserManager:
 
     def _build_proxy_username(self) -> str:
         """Build proxy username with session control parameters."""
-        base_username = self.proxy_config.username
+        base_username = self.config.proxy_username
 
         # Handle session management based on type
-        if self.proxy_config.session_type == 'none':
+        if self.config.session_type == 'none':
             # No session management - use base username
             username = base_username
-        elif self.proxy_config.session_type == 'const':
+        elif self.config.session_type == 'const':
             # Use same peer consistently
             username = f"{base_username}-const"
-        elif self.proxy_config.session_type == 'rotate':
+        elif self.config.session_type == 'rotate':
             # Rotate IP for each request (new session every time)
-            session_id = ''.join(random.choices(string.ascii_letters + string.digits, k=self.proxy_config.session_id_length))
+            session_id = ''.join(random.choices(string.ascii_letters + string.digits, k=self.config.session_id_length))
             username = f"{base_username}-session-{session_id}"
         else:  # sticky (default)
             username = self._get_sticky_session_username()
@@ -263,11 +261,11 @@ class BrowserManager:
         # Check if we need a new session
         if (self.current_session_id is None or
             self.session_start_time is None or
-            (current_time - self.session_start_time) > self.proxy_config.session_duration):
+            (current_time - self.session_start_time) > self.config.session_duration):
 
             # Create new session
             self.current_session_id = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
             self.session_start_time = current_time
-            self.logger.info(f"Created new sticky session: {self.current_session_id} (duration: {self.proxy_config.session_duration}s)")
+            self.logger.info(f"Created new sticky session: {self.current_session_id} (duration: {self.config.session_duration}s)")
 
-        return f"{self.proxy_config.username}-session-{self.current_session_id}"
+        return f"{self.config.proxy_username}-session-{self.current_session_id}"

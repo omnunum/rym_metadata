@@ -4,9 +4,9 @@ import asyncio
 import logging
 from beetsplug_rym_camoufox import RYMCamoufoxPlugin
 from camoufox import AsyncCamoufox
-from rym.search import RYMSearchEngine
+# RYMSearchEngine is now integrated into RYMScraper
 
-async def test_album_async():
+async def debug_album_async():
     """Test fetching genre info for a single album using AsyncCamoufox."""
 
     # Enable info level logging (use DEBUG for more verbose resource blocking logs)
@@ -21,12 +21,7 @@ async def test_album_async():
     year = 2013
 
     print(f"Testing: {artist} - {album}")
-
-    # Check credentials
-    if not plugin.proxy_config.is_valid:
-        print("Warning: No proxy credentials found")
-        print("Configure proxy settings in beets config: proxy_host, proxy_port, proxy_username, proxy_password")
-
+    
     try:
         # Get browser options and create browser
         browser_options = plugin.browser_manager.get_browser_options()
@@ -54,9 +49,8 @@ async def test_album_async():
                 search_url = plugin.scraper.build_search_url(artist, album)
                 print(f"Search URL: {search_url}")
 
-                # Create search engine and test search
-                search_engine = RYMSearchEngine(plugin.scraper)
-                album_url = await search_engine.search_album_url(search_url, page, artist, album, year)
+                # Test integrated search functionality
+                album_url = await plugin.scraper._search_album_url(search_url, page, artist, album, year)
                 print(f"Found album URL: {album_url}")
 
                 if album_url:
@@ -71,9 +65,9 @@ async def test_album_async():
         import traceback
         traceback.print_exc()
 
-def test_album():
-    """Sync wrapper for async test."""
-    asyncio.run(test_album_async())
+def debug_album():
+    """Sync wrapper for async debug function."""
+    asyncio.run(debug_album_async())
 
 if __name__ == "__main__":
-    test_album()
+    debug_album()

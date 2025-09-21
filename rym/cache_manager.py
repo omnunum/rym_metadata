@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 class HtmlCacheManager:
     """Manages HTML caching for RYM pages."""
 
-    def __init__(self, cache_dir: str, expiry_days: int = 0):
+    def __init__(self, cache_dir: str, expiry_days: int = 0) -> None:
         self.cache_dir = Path(cache_dir)
         self.expiry_days = expiry_days
         self.logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class HtmlCacheManager:
             cache_file.unlink()  # Remove corrupted cache
             return None
 
-    def cache_html(self, url: str, html: str):
+    def cache_html(self, url: str, html: str) -> None:
         """Cache HTML content for URL."""
         cache_file = self._get_cache_file(url)
 
@@ -74,7 +74,7 @@ class HtmlCacheManager:
         except IOError as e:
             self.logger.error(f"Failed to cache HTML for {url}: {e}")
 
-    def clear_cache(self):
+    def clear_cache(self) -> int:
         """Clear all cached files."""
         try:
             cache_files = list(self.cache_dir.glob("*.json"))

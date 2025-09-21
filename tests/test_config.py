@@ -2,118 +2,118 @@
 
 import pytest
 from unittest.mock import Mock
-from rym.config import ProxyConfig
+from rym.core import RYMConfig
 
 
-class TestProxyConfig:
-    """Test suite for ProxyConfig dataclass."""
+class TestRYMConfig:
+    """Test suite for RYMConfig dataclass."""
 
     def test_server_url_http(self):
         """Test HTTP server URL generation."""
-        config = ProxyConfig(
-            enabled=True,
-            host="proxy.example.com",
-            port=8080,
-            use_tls=False
+        config = RYMConfig(
+            proxy_enabled=True,
+            proxy_host="proxy.example.com",
+            proxy_port=8080,
+            proxy_use_tls=False
         )
 
         assert config.server_url == "http://proxy.example.com:8080"
 
     def test_server_url_https(self):
         """Test HTTPS server URL generation."""
-        config = ProxyConfig(
-            enabled=True,
-            host="proxy.example.com",
-            port=8080,
-            use_tls=True
+        config = RYMConfig(
+            proxy_enabled=True,
+            proxy_host="proxy.example.com",
+            proxy_port=8080,
+            proxy_use_tls=True
         )
 
         assert config.server_url == "https://proxy.example.com:8080"
 
     def test_server_url_missing_host(self):
         """Test server URL when host is missing."""
-        config = ProxyConfig(
-            enabled=True,
-            host=None,
-            port=8080
+        config = RYMConfig(
+            proxy_enabled=True,
+            proxy_host=None,
+            proxy_port=8080
         )
 
         assert config.server_url is None
 
     def test_server_url_missing_port(self):
         """Test server URL when port is missing."""
-        config = ProxyConfig(
-            enabled=True,
-            host="proxy.example.com",
-            port=None
+        config = RYMConfig(
+            proxy_enabled=True,
+            proxy_host="proxy.example.com",
+            proxy_port=None
         )
 
         assert config.server_url is None
 
-    def test_is_valid_complete_config(self):
+    def test_is_proxy_valid_complete_config(self):
         """Test validation with complete proxy configuration."""
-        config = ProxyConfig(
-            enabled=True,
-            host="proxy.example.com",
-            port=8080,
-            username="testuser",
-            password="testpass"
+        config = RYMConfig(
+            proxy_enabled=True,
+            proxy_host="proxy.example.com",
+            proxy_port=8080,
+            proxy_username="testuser",
+            proxy_password="testpass"
         )
 
-        assert config.is_valid is True
+        assert config.is_proxy_valid is True
 
-    def test_is_valid_disabled_proxy(self):
+    def test_is_proxy_valid_disabled_proxy(self):
         """Test validation when proxy is disabled."""
-        config = ProxyConfig(enabled=False)
-        assert config.is_valid is False
+        config = RYMConfig(proxy_enabled=False)
+        assert config.is_proxy_valid is False
 
-    def test_is_valid_missing_host(self):
+    def test_is_proxy_valid_missing_host(self):
         """Test validation when host is missing."""
-        config = ProxyConfig(
-            enabled=True,
-            host=None,
-            port=8080,
-            username="testuser",
-            password="testpass"
+        config = RYMConfig(
+            proxy_enabled=True,
+            proxy_host=None,
+            proxy_port=8080,
+            proxy_username="testuser",
+            proxy_password="testpass"
         )
 
-        assert config.is_valid is False
+        assert config.is_proxy_valid is False
 
-    def test_is_valid_missing_port(self):
+    def test_is_proxy_valid_missing_port(self):
         """Test validation when port is missing."""
-        config = ProxyConfig(
-            enabled=True,
-            host="proxy.example.com",
-            port=None,
-            username="testuser",
-            password="testpass"
+        config = RYMConfig(
+            proxy_enabled=True,
+            proxy_host="proxy.example.com",
+            proxy_port=None,
+            proxy_username="testuser",
+            proxy_password="testpass"
         )
 
-        assert config.is_valid is False
+        assert config.is_proxy_valid is False
 
-    def test_is_valid_missing_username(self):
+    def test_is_proxy_valid_missing_username(self):
         """Test validation when username is missing."""
-        config = ProxyConfig(
-            enabled=True,
-            host="proxy.example.com",
-            port=8080,
-            username=None,
-            password="testpass"
+        config = RYMConfig(
+            proxy_enabled=True,
+            proxy_host="proxy.example.com",
+            proxy_port=8080,
+            proxy_username=None,
+            proxy_password="testpass"
         )
 
-        assert config.is_valid is False
+        assert config.is_proxy_valid is False
 
-    def test_is_valid_missing_password(self):
+    def test_is_proxy_valid_missing_password(self):
         """Test validation when password is missing."""
-        config = ProxyConfig(
-            enabled=True,
-            host="proxy.example.com",
-            port=8080,
-            username="testuser",
-            password=None
+        config = RYMConfig(
+            proxy_enabled=True,
+            proxy_host="proxy.example.com",
+            proxy_port=8080,
+            proxy_username="testuser",
+            proxy_password=None
         )
 
-        assert config.is_valid is False
+        assert config.is_proxy_valid is False
 
 
 

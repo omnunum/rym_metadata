@@ -1,6 +1,12 @@
-# Beets RateYourMusic Plugin
+# RYM Metadata Scraper
 
-A beets plugin that scrapes genre information from RateYourMusic using Camoufox browser automation with proxy support for Cloudflare bypass.
+A flexible RateYourMusic metadata scraper that can be used as a beets plugin or standalone library. Scrapes genre and descriptor information using Camoufox browser automation with proxy support for Cloudflare bypass.
+
+## Dual Usage
+
+This package supports two usage patterns:
+1. **Beets Plugin**: Integrates with beets music library management
+2. **Standalone Library**: Can be imported into other tools (like streamrip forks)
 
 ## Installation
 
@@ -8,6 +14,139 @@ A beets plugin that scrapes genre information from RateYourMusic using Camoufox 
 pip install -r requirements.txt
 pip install -e .
 ```
+
+## Usage Patterns
+
+### 1. Standalone Library (for streamrip, etc.)
+
+The standalone API is designed to be imported into any Python application without requiring beets.
+
+#### Basic Setup
+
+```python
+import asyncio
+from rym import RYMMetadataScraper, RYMConfig
+
+# Create configuration
+config = RYMConfig(
+    proxy_enabled=True,
+    proxy_host="your.proxy.host",
+    proxy_port=8080,
+    proxy_username="your_username",
+    proxy_password="your_password",
+
+    # Optional settings
+    cache_enabled=True,
+    cache_dir=".rym_cache",
+    max_retries=3
+)
+
+# Create scraper
+scraper = RYMMetadataScraper(config)
+```
+
+#### Single Album Lookup
+
+```python
+async def get_single_album():
+    # Include year for better matching when available
+    metadata = await scraper.get_album_metadata("Radiohead", "OK Computer", 1997)
+
+    if metadata:
+        print(f"Genres: {metadata.genres}")           # ['Alternative Rock', 'Art Rock']
+        print(f"Descriptors: {metadata.descriptors}") # ['melancholic', 'atmospheric']
+        print(f"URL: {metadata.url}")                  # RYM album page URL
+    else:
+        print("Album not found on RYM")
+```
+
+#### Batch Processing
+
+```python
+async def get_multiple_albums():
+    albums = [
+        ("Radiohead", "Kid A", 2000),
+        ("Aphex Twin", "Selected Ambient Works 85-92", 1992),
+        ("Artist Name", "Album Name", None)  # Year can be None
+    ]
+
+    results = await scraper.get_multiple_albums_metadata(albums)
+
+    for i, metadata in enumerate(results):
+        artist, album, year = albums[i]
+        if metadata:
+            genres_str = ", ".join(metadata.genres)
+            desc_str = ", ".join(metadata.descriptors)
+            print(f"{artist} - {album}: {genres_str} | {desc_str}")
+        else:
+            print(f"{artist} - {album}: Not found")
+```
+
+#### Running Standalone Scripts
+
+```python
+import asyncio
+
+async def main():
+    config = RYMConfig(proxy_enabled=True, ...)
+    scraper = RYMMetadataScraper(config)
+
+    metadata = await scraper.get_album_metadata("Artist", "Album", 2000)
+    return metadata
+
+# Run the async function
+if __name__ == "__main__":
+    result = asyncio.run(main())
+```
+
+#### Configuration Options for Standalone
+
+```python
+config = RYMConfig(
+    # Proxy settings (usually required for Cloudflare bypass)
+    proxy_enabled=True,
+    proxy_host="proxy.example.com",
+    proxy_port=8080,
+    proxy_username="username",
+    proxy_password="password",
+    proxy_use_tls=False,                    # True for HTTPS proxy
+
+    # Session management for sticky IPs
+    session_type='sticky',                  # 'sticky', 'rotate', 'const', 'none'
+    session_duration=600,                   # Seconds to keep same IP
+
+    # Caching (improves performance)
+    cache_enabled=True,
+    cache_dir=".rym_cache",
+    cache_expiry_days=7,                    # 0 = never expires
+
+    # Retry behavior
+    max_retries=3,
+    retry_delay=2.0,                        # Base delay between retries
+    page_timeout=30000,                     # Page load timeout (ms)
+
+    # Bandwidth optimization
+    resource_blocking_enabled=True,         # Block images/CSS for speed
+
+    # Search matching
+    matching_threshold=0.8                  # Minimum similarity score (0.0-1.0) for accepting matches
+)
+```
+
+#### Error Handling
+
+```python
+async def safe_lookup(artist, album, year=None):
+    try:
+        scraper = RYMMetadataScraper(config)
+        metadata = await scraper.get_album_metadata(artist, album, year)
+        return metadata
+    except Exception as e:
+        print(f"Error looking up {artist} - {album}: {e}")
+        return None
+```
+
+### 2. Beets Plugin
 
 Add to beets config (`~/.config/beets/config.yaml`):
 ```yaml
@@ -27,6 +166,7 @@ rym:
   page_timeout: 30000
   cache_enabled: true
   auto_tag: false
+  matching_threshold: 0.8
 ```
 
 ## Configuration Options
@@ -43,7 +183,8 @@ rym:
 | `page_timeout` | 30000 | Page load timeout (milliseconds) |
 | `cache_enabled` | true | Enable HTML caching |
 | `cache_dir` | .rym_cache | Cache directory path |
-| `auto_tag` | false | Automatically tag albums |
+| `auto_tag` | false | Automatically tag albums during import |
+| `matching_threshold` | 0.8 | Minimum similarity score (0.0-1.0) for accepting matches |
 
 ## Usage
 
@@ -58,9 +199,93 @@ beet rym --clear-cache         # Clear HTML cache
 beet rym --cache-info          # Show cache statistics
 ```
 
-## Data Storage
+## Auto-Tagging
 
-Genres are stored in the `rym_genres` field. View with:
-```bash
-beet ls -f '$artist - $album: $rym_genres'
+Set `auto_tag: true` in your config to automatically fetch RYM genres when importing albums:
+
+```yaml
+rym:
+  auto_tag: true
+  # ... other config options
 ```
+
+This will automatically add RYM genre information to newly imported albums.
+
+## Data Fields
+
+### Standalone Usage
+- `metadata.genres`: List of genre strings
+- `metadata.descriptors`: List of descriptor strings
+- `metadata.url`: RYM album URL
+
+### Beets Plugin
+- `genres`: Semicolon-separated genres (written to files)
+- `descriptors`: Semicolon-separated descriptors (beets database only)
+
+View beets data with:
+```bash
+beet ls -f '$artist - $album: $genres'
+beet ls -f '$artist - $album: $descriptors'
+```
+
+## Streamrip Integration Example
+
+See `example_standalone.py` for complete integration examples. Basic pattern:
+
+```python
+from rym import RYMMetadataScraper, RYMConfig
+from mutagen.flac import FLAC
+
+async def enhance_audio_file(artist, album, file_path):
+    scraper = RYMMetadataScraper(config)
+    metadata = await scraper.get_album_metadata(artist, album)
+
+    if metadata:
+        audio = FLAC(file_path)
+        audio['GENRE'] = metadata.genres
+        audio['DESCRIPTORS'] = metadata.descriptors  # Custom field
+        audio.save()
+```
+
+## Quick Start (Standalone)
+
+1. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Test the setup:**
+   ```bash
+   python example_standalone.py
+   ```
+
+3. **Set up proxy credentials** (required for bypassing Cloudflare):
+   - Get proxy credentials from a service like Bright Data
+   - Update config with your proxy details
+
+4. **Basic test script:**
+   ```python
+   import asyncio
+   from rym import RYMMetadataScraper, RYMConfig
+
+   async def test():
+       config = RYMConfig(
+           proxy_enabled=True,
+           proxy_host="your.proxy.host",
+           proxy_port=8080,
+           proxy_username="your_username",
+           proxy_password="your_password"
+       )
+
+       scraper = RYMMetadataScraper(config)
+       result = await scraper.get_album_metadata("Radiohead", "OK Computer", 1997)
+
+       if result:
+           print("Success!")
+           print(f"Genres: {result.genres}")
+           print(f"Descriptors: {result.descriptors}")
+       else:
+           print("Failed to get metadata")
+
+   asyncio.run(test())
+   ```

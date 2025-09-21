@@ -9,7 +9,7 @@ class TestRYMScraperURLs:
     """Test suite for RYM scraper URL building methods."""
 
     @pytest.fixture
-    def scraper(self, mock_proxy_config):
+    def scraper(self):
         """Create a minimal scraper instance for URL testing."""
         # Mock config object
         class MockConfig:
@@ -22,7 +22,6 @@ class TestRYMScraperURLs:
 
         return RYMScraper(
             config=MockConfig(),
-            proxy_config=mock_proxy_config,
             cache_manager=None,
             session_manager=None,
             browser_manager=None
@@ -47,9 +46,9 @@ class TestRYMScraperURLs:
 
         url = scraper.build_direct_url(artist, album)
 
-        # Special characters should be removed
-        assert "sigur-ros" in url or "sigur-rs" in url  # Depending on how characters are handled
-        assert "gtis-byrjun" in url or "agtis-byrjun" in url
+        # Special characters should be removed (accents normalized)
+        assert "sigur-ros" in url
+        assert "agætis-byrjun" in url or "agtis-byrjun" in url
 
     def test_build_direct_url_punctuation(self, scraper):
         """Test building direct URL with punctuation."""
@@ -112,9 +111,9 @@ class TestRYMScraperURLs:
         url = scraper.build_search_url(artist, album)
 
         decoded_query = unquote(url.split("searchterm=")[1])
-        # Non-word characters should be converted to spaces
-        assert "Belle   Sebastian" in decoded_query or "Belle  Sebastian" in decoded_query
-        assert "If You re Feeling Sinister" in decoded_query
+        # Non-word characters should be converted to spaces (and normalized)
+        assert "Belle Sebastian" in decoded_query  # & becomes space, then normalized
+        assert "If You re Feeling Sinister" in decoded_query  # ' becomes space
 
     def test_build_search_url_multiple_spaces_normalized(self, scraper):
         """Test that multiple spaces are normalized in search URLs."""
