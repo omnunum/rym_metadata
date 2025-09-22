@@ -17,7 +17,7 @@ class TestRYMConfig:
             proxy_use_tls=False
         )
 
-        assert config.server_url == "http://proxy.example.com:8080"
+        assert config.proxy_server_url == "http://proxy.example.com:8080"
 
     def test_server_url_https(self):
         """Test HTTPS server URL generation."""
@@ -28,7 +28,7 @@ class TestRYMConfig:
             proxy_use_tls=True
         )
 
-        assert config.server_url == "https://proxy.example.com:8080"
+        assert config.proxy_server_url == "https://proxy.example.com:8080"
 
     def test_server_url_missing_host(self):
         """Test server URL when host is missing."""
@@ -38,7 +38,7 @@ class TestRYMConfig:
             proxy_port=8080
         )
 
-        assert config.server_url is None
+        assert config.proxy_server_url is None
 
     def test_server_url_missing_port(self):
         """Test server URL when port is missing."""
@@ -48,7 +48,7 @@ class TestRYMConfig:
             proxy_port=None
         )
 
-        assert config.server_url is None
+        assert config.proxy_server_url is None
 
     def test_is_proxy_valid_complete_config(self):
         """Test validation with complete proxy configuration."""

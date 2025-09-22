@@ -13,6 +13,31 @@ from .cache_manager import HtmlCacheManager
 from .session_manager import ProxySessionManager
 from .browser import BrowserManager
 
+def _deduplicate_list(items: List[str]) -> List[str]:
+    """Remove duplicates while preserving order."""
+    seen = set()
+    unique_items = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            unique_items.append(item)
+    return unique_items
+
+
+def _normalize_artist_name(name: str) -> str:
+    """Normalize artist name for exact matching."""
+    import unicodedata
+    # Normalize unicode and remove accents
+    normalized = unicodedata.normalize('NFD', name)
+    ascii_name = ''.join(char for char in normalized if unicodedata.category(char) != 'Mn')
+    # Lowercase and normalize whitespace
+    return ' '.join(ascii_name.lower().split())
+
+
+def _is_exact_artist_match(candidate: str, target: str) -> bool:
+    """Check if artist names match exactly after normalization."""
+    return _normalize_artist_name(candidate) == _normalize_artist_name(target)
+
 
 class RYMScraper:
     """Handles core scraping operations for RYM album data."""
@@ -69,6 +94,49 @@ class RYMScraper:
 
         except Exception as e:
             self.logger.error(f"Error processing {artist} - {album}: {e}")
+            return None
+
+    async def get_artist_genres_and_descriptors(self, artist: str, page: Any = None) -> Optional[Dict[str, Any]]:
+        """Get genre and descriptor information for an artist (beets-independent).
+
+        Args:
+            artist: Artist name
+            page: Browser page object
+
+        Returns:
+            Dict with 'genres' and 'descriptors' lists, or None if not found
+        """
+        try:
+            # Try direct artist URL first
+            direct_url = self.build_artist_url(artist)
+            self.logger.debug("Trying direct artist URL: %s", direct_url)
+
+            # Test if direct URL works
+            genre_data = await self.extract_artist_genres_from_url(direct_url, page)
+            genres = genre_data.get('genres', [])
+            descriptors = genre_data.get('descriptors', [])
+
+            # If direct URL fails, fall back to search
+            if not genres:
+                self.logger.debug(f"Direct URL failed, searching for artist {artist}")
+                search_url = self.build_artist_search_url(artist)
+
+                # Use search functionality for artists
+                artist_url = await self._search_artist_url(search_url, page, artist)
+
+                if not artist_url:
+                    self.logger.debug(f"No RYM page found for artist {artist}")
+                    return None
+
+                # Fetch artist page and extract genres
+                genre_data = await self.extract_artist_genres_from_url(artist_url, page)
+                genres = genre_data.get('genres', [])
+                descriptors = genre_data.get('descriptors', [])
+
+            return {'genres': genres, 'descriptors': descriptors}
+
+        except Exception as e:
+            self.logger.error(f"Error processing artist {artist}: {e}")
             return None
 
     async def process_single_album(self, album_obj: Any, page: Any, dry_run: bool = False) -> Optional[tuple[Any, Dict[str, Any]]]:
@@ -143,6 +211,31 @@ class RYMScraper:
 
         return f"http://rateyourmusic.com/search?searchtype=l&searchterm={encoded_query}"
 
+    def build_artist_url(self, artist: str) -> str:
+        """Build direct RYM artist URL for the given artist."""
+        import unicodedata
+
+        def clean_for_url(text: str) -> str:
+            # Normalize unicode and remove accents
+            text = unicodedata.normalize('NFD', text)
+            text = ''.join(char for char in text if unicodedata.category(char) != 'Mn')
+            # Remove non-word characters and convert to lowercase
+            text = re.sub(r'[^\w\s]', '', text.lower()).strip()
+            # Replace spaces with hyphens
+            return re.sub(r'\s+', '-', text)
+
+        artist_clean = clean_for_url(artist)
+        return f"http://rateyourmusic.com/artist/{artist_clean}"
+
+    def build_artist_search_url(self, artist: str) -> str:
+        """Build RYM search URL for the given artist."""
+        # Clean up artist name - replace non-word chars with spaces
+        artist_clean = re.sub(r'[^\w\s]', ' ', artist).strip()
+        # Normalize multiple spaces to single spaces
+        artist_clean = re.sub(r'\s+', ' ', artist_clean)
+        encoded_query = quote(artist_clean)
+        return f"http://rateyourmusic.com/search?searchtype=a&searchterm={encoded_query}"
+
     async def extract_genres_from_url(self, url: str, page: Any) -> Dict[str, list[str]]:
         """Extract genre information and descriptors from an RYM album page using async."""
         html = await self.fetch_url_with_retry(url, page)
@@ -151,20 +244,24 @@ class RYMScraper:
 
         try:
             soup = BeautifulSoup(html, 'html.parser')
+
+            # Fail fast: Check if this looks like a valid album page
+            genre_row = soup.find('tr', class_='release_genres')
+            if not genre_row:
+                # No release_genres row means this isn't a valid album page
+                return {'genres': [], 'descriptors': []}
+
             genres = []
             descriptors = []
 
-            # Look for the specific release_genres row
-            genre_row = soup.find('tr', class_='release_genres')
-            if genre_row:
-                # Find all genre links within the release_pri_genres span
-                pri_genres = genre_row.find('span', class_='release_pri_genres')
-                if pri_genres:
-                    genre_links = pri_genres.find_all('a', class_='genre')
-                    for link in genre_links:
-                        genre_text = link.get_text(strip=True)
-                        if genre_text:
-                            genres.append(genre_text)
+            # Extract genres from the release_pri_genres span
+            pri_genres = genre_row.find('span', class_='release_pri_genres')
+            if pri_genres:
+                genre_links = pri_genres.find_all('a', class_='genre')
+                for link in genre_links:
+                    genre_text = link.get_text(strip=True)
+                    if genre_text:
+                        genres.append(genre_text)
 
             # Look for descriptors in the release_descriptors row
             descriptor_row = soup.find('tr', class_='release_descriptors')
@@ -176,31 +273,55 @@ class RYMScraper:
                     if descriptor:
                         descriptors.append(descriptor)
 
-            # Fallback to broader search if no genres found
-            if not genres:
-                genre_links = soup.find_all('a', class_='genre')
-                for link in genre_links:
-                    genre_text = link.get_text(strip=True)
-                    if genre_text and len(genre_text) > 1:
-                        genres.append(genre_text)
-
-            # Remove duplicates while preserving order
-            def deduplicate(items: list[str]) -> list[str]:
-                seen = set()
-                unique_items = []
-                for item in items:
-                    if item not in seen:
-                        seen.add(item)
-                        unique_items.append(item)
-                return unique_items
 
             return {
-                'genres': deduplicate(genres),
-                'descriptors': deduplicate(descriptors)
+                'genres': _deduplicate_list(genres),
+                'descriptors': _deduplicate_list(descriptors)
             }
 
         except Exception as e:
             self.logger.error(f"Error extracting genres from {url}: {e}")
+            return {'genres': [], 'descriptors': []}
+
+    async def extract_artist_genres_from_url(self, url: str, page: Any) -> Dict[str, list[str]]:
+        """Extract genre information and descriptors from an RYM artist page using async."""
+        html = await self.fetch_url_with_retry(url, page)
+        if not html:
+            return {'genres': [], 'descriptors': []}
+
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            genres = []
+            descriptors = []
+
+            # Look for genres in artist-specific sections only
+            # Find the "Genres" header and extract from the following info_content div
+            info_headers = soup.find_all('div', class_='info_hdr')
+            for header in info_headers:
+                if header.get_text(strip=True).lower() != 'genres':
+                    continue
+
+                # Find the next info_content div after the Genres header
+                info_content = header.find_next_sibling('div', class_='info_content')
+                if not info_content:
+                    break
+
+                genre_links = info_content.find_all('a', class_='genre')
+                for link in genre_links:
+                    genre_text = link.get_text(strip=True)
+                    if not genre_text:
+                        continue
+                    genres.append(genre_text)
+                break
+
+
+            return {
+                'genres': _deduplicate_list(genres),
+                'descriptors': _deduplicate_list(descriptors)
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error extracting artist genres from {url}: {e}")
             return {'genres': [], 'descriptors': []}
 
     async def fetch_url_with_retry(self, url: str, page: Any) -> Optional[str]:
@@ -348,6 +469,45 @@ class RYMScraper:
             self.logger.error(f"Error parsing search results: {e}")
 
         return None
+
+    async def _search_artist_url(self, search_url: str, page: Any, artist: str) -> Optional[str]:
+        """Search for artist URL on RYM search page using fuzzy matching."""
+        html = await self.fetch_url_with_retry(search_url, page)
+        if not html:
+            return None
+
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+
+            # For artist search, look for results with class="searchpage" that link to artists
+            artist_links = soup.find_all('a', class_='searchpage', href=re.compile(r'/artist/'))
+
+            if not artist_links:
+                self.logger.debug("No artist links found in search results")
+                return None
+
+            # Look for exact match only (after normalization)
+            for link in artist_links:
+                link_text = link.get_text(strip=True)
+                if _is_exact_artist_match(link_text, artist):
+                    self.logger.info(f"Found exact artist match: '{link_text}' matches '{artist}'")
+                    relative_url = link['href']
+                    return f"http://rateyourmusic.com{relative_url}"
+
+            # No exact match found
+            self.logger.info(f"No exact match found for artist '{artist}' in search results")
+
+        except Exception as e:
+            self.logger.error(f"Error parsing artist search results: {e}")
+
+        return None
+
+    def _calculate_string_similarity(self, s1: str, s2: str) -> float:
+        """Calculate string similarity using SequenceMatcher."""
+        if not s1 or not s2:
+            return 0.0
+        from difflib import SequenceMatcher
+        return SequenceMatcher(None, s1.lower().strip(), s2.lower().strip()).ratio()
 
     def _extract_candidate_info(self, result_table: Any) -> Optional[Dict[str, Any]]:
         """Extract artist, album, and year information from a search result table."""

@@ -4,9 +4,8 @@ This module provides a clean interface for scraping RateYourMusic metadata
 that can be used standalone or integrated into other tools like streamrip.
 """
 
-import asyncio
 import logging
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Literal
 from dataclasses import dataclass
 
 from .session_manager import ProxySessionManager
@@ -14,6 +13,7 @@ from .cache_manager import HtmlCacheManager
 from .browser import BrowserManager
 from .scraper import RYMScraper
 
+from camoufox import AsyncCamoufox
 
 @dataclass
 class AlbumMetadata:
@@ -26,10 +26,19 @@ class AlbumMetadata:
 
 
 @dataclass
+class ArtistMetadata:
+    """Container for artist metadata extracted from RYM."""
+    artist: str
+    genres: List[str]
+    descriptors: List[str]
+    url: Optional[str] = None
+
+
+@dataclass
 class RYMConfig:
     """Configuration for standalone RYM scraper."""
     # Proxy configuration
-    proxy_enabled: bool = True
+    proxy_enabled: bool = False  # Disabled by default for simplicity
     proxy_host: Optional[str] = None
     proxy_port: Optional[int] = None
     proxy_username: Optional[str] = None
@@ -38,7 +47,7 @@ class RYMConfig:
     proxy_cert_path: Optional[str] = None
 
     # Session management
-    session_type: str = 'sticky'  # 'sticky', 'rotate', 'const', 'none'
+    session_type: Literal['sticky', 'rotate', 'const', 'none'] = 'none'  # No session management by default
     session_duration: int = 600
     session_id_length: int = 10
     port_range_start: int = 10001
@@ -52,7 +61,7 @@ class RYMConfig:
     # Cache settings
     cache_enabled: bool = True
     cache_dir: str = '.rym_cache'
-    cache_expiry_days: int = 0
+    cache_expiry_days: int = 7  # Cache for a week by default
 
     # Resource blocking
     resource_blocking_enabled: bool = True
@@ -98,7 +107,7 @@ class RYMConfig:
         )
 
     @property
-    def server_url(self) -> Optional[str]:
+    def proxy_server_url(self) -> Optional[str]:
         """Build complete proxy server URL with protocol."""
         if not (self.proxy_host and self.proxy_port):
             return None
@@ -129,8 +138,8 @@ class RYMConfig:
 class RYMMetadataScraper:
     """Standalone RYM metadata scraper for use in any application."""
 
-    def __init__(self, config: RYMConfig) -> None:
-        self.config = config
+    def __init__(self, config: Optional[RYMConfig] = None) -> None:
+        self.config = config or RYMConfig()  # Use defaults if no config provided
         self.logger = logging.getLogger(__name__)
 
         # Initialize components
@@ -138,6 +147,10 @@ class RYMMetadataScraper:
         self._init_cache_manager()
         self._init_browser_manager()
         self._init_scraper()
+
+        # Browser session management
+        self._browser = None
+        self._page = None
 
     def _init_session_manager(self) -> None:
         """Initialize proxy session manager."""
@@ -170,6 +183,45 @@ class RYMMetadataScraper:
             self.browser_manager
         )
 
+    async def __aenter__(self):
+        """Async context manager entry - start browser session."""
+        await self._start_browser_session()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - cleanup browser session."""
+        await self._cleanup_browser_session()
+
+    async def _start_browser_session(self) -> None:
+        """Start a persistent browser session for multiple requests."""
+        if self._browser is not None:
+            return  # Already started
+
+        # Get browser options
+        browser_options = self.browser_manager.get_browser_options()
+
+        try:
+            self._browser = await AsyncCamoufox(**browser_options).__aenter__()
+            self._page = await self._browser.new_page()
+            self.logger.debug("Browser session started successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to start browser session: {e}")
+            self._browser = None
+            self._page = None
+            raise
+
+    async def _cleanup_browser_session(self) -> None:
+        """Clean up the persistent browser session."""
+        if self._browser is not None:
+            try:
+                await self._browser.__aexit__(None, None, None)
+                self.logger.debug("Browser session cleaned up")
+            except Exception as e:
+                self.logger.warning(f"Error during browser cleanup: {e}")
+            finally:
+                self._browser = None
+                self._page = None
+
     async def get_album_metadata(self, artist: str, album: str, year: Optional[int] = None) -> Optional[AlbumMetadata]:
         """Get metadata for a single album.
 
@@ -181,37 +233,70 @@ class RYMMetadataScraper:
         Returns:
             AlbumMetadata object or None if not found
         """
-        from camoufox import AsyncCamoufox
-
-        # Get browser options
-        browser_options = self.browser_manager.get_browser_options()
+        # Ensure browser session is started
+        if self._browser is None:
+            await self._start_browser_session()
 
         try:
-            async with AsyncCamoufox(**browser_options) as browser:
-                page = await browser.new_page()
+            # Use the existing method that properly handles year parameter
+            genre_data = await self.scraper.get_album_genres_and_descriptors(artist, album, year, self._page)
 
-                # Use the existing method that properly handles year parameter
-                genre_data = await self.scraper.get_album_genres_and_descriptors(artist, album, year, page)
+            if not genre_data:
+                return None
 
-                if not genre_data:
-                    return None
+            genres = genre_data.get('genres', [])
+            descriptors = genre_data.get('descriptors', [])
 
-                genres = genre_data.get('genres', [])
-                descriptors = genre_data.get('descriptors', [])
+            # Build URL for reference (try direct first)
+            url = self.scraper.build_direct_url(artist, album)
 
-                # Build URL for reference (try direct first)
-                url = self.scraper.build_direct_url(artist, album)
-
-                return AlbumMetadata(
-                    artist=artist,
-                    album=album,
-                    genres=genres,
-                    descriptors=descriptors,
-                    url=url
-                )
+            return AlbumMetadata(
+                artist=artist,
+                album=album,
+                genres=genres,
+                descriptors=descriptors,
+                url=url
+            )
 
         except Exception as e:
             self.logger.error(f"Error getting metadata for {artist} - {album}: {e}")
+            return None
+
+    async def get_artist_metadata(self, artist: str) -> Optional[ArtistMetadata]:
+        """Get metadata for a single artist.
+
+        Args:
+            artist: Artist name
+
+        Returns:
+            ArtistMetadata object or None if not found
+        """
+        # Ensure browser session is started
+        if self._browser is None:
+            await self._start_browser_session()
+
+        try:
+            # Use the new artist method
+            genre_data = await self.scraper.get_artist_genres_and_descriptors(artist, self._page)
+
+            if not genre_data:
+                return None
+
+            genres = genre_data.get('genres', [])
+            descriptors = genre_data.get('descriptors', [])
+
+            # Build URL for reference (try direct first)
+            url = self.scraper.build_artist_url(artist)
+
+            return ArtistMetadata(
+                artist=artist,
+                genres=genres,
+                descriptors=descriptors,
+                url=url
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error getting metadata for artist {artist}: {e}")
             return None
 
     async def get_multiple_albums_metadata(self, albums: List[Tuple[str, str, Optional[int]]]) -> List[Optional[AlbumMetadata]]:
@@ -245,5 +330,7 @@ class RYMMetadataScraper:
         if self.cache_manager:
             return self.cache_manager.get_cache_info()
         return {'cache_enabled': False}
+
+
 
 

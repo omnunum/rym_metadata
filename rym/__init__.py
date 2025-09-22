@@ -1,7 +1,12 @@
 """RYM metadata scraping modules."""
 
 # Core standalone functionality (for streamrip and other integrations)
-from .core import RYMMetadataScraper, RYMConfig, AlbumMetadata
+from .core import (
+    RYMMetadataScraper,
+    RYMConfig,
+    AlbumMetadata,
+    ArtistMetadata,
+)
 
 # Internal components (for advanced usage)
 from .session_manager import ProxySessionManager
@@ -14,8 +19,9 @@ __all__ = [
     'RYMMetadataScraper',
     'RYMConfig',
     'AlbumMetadata',
+    'ArtistMetadata',
 
-    # Internal components
+    # Internal components (for advanced usage)
     'ProxySessionManager',
     'HtmlCacheManager',
     'BrowserManager',

@@ -100,11 +100,12 @@ class TestRYMScraper:
         assert result['genres'] == ['Electronic', 'House']  # No duplicates
 
     @pytest.mark.asyncio
-    async def test_extract_genres_fallback_search(self, scraper):
-        """Test fallback to broader genre search when primary fails."""
+    async def test_extract_genres_no_fallback_search(self, scraper):
+        """Test that random genre links are NOT extracted when proper structure is missing."""
         html = '''
         <html>
         <body>
+            <!-- Random genre links outside proper structure should be ignored -->
             <a class="genre" href="/genre/rock">Rock</a>
             <a class="genre" href="/genre/alternative">Alternative</a>
         </body>
@@ -114,8 +115,9 @@ class TestRYMScraper:
         with patch.object(scraper, 'fetch_url_with_retry', return_value=html):
             result = await scraper.extract_genres_from_url("http://test.com", Mock())
 
-        assert 'Rock' in result['genres']
-        assert 'Alternative' in result['genres']
+        # Should return empty since there's no proper release_genres structure
+        assert result['genres'] == []
+        assert result['descriptors'] == []
 
     @pytest.mark.asyncio
     async def test_fetch_url_with_cache_hit(self, scraper_with_cache):

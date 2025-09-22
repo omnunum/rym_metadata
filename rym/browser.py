@@ -43,11 +43,11 @@ class BrowserManager:
             username = self._build_proxy_username()
 
             browser_proxy_config = {
-                "server": self.config.server_url,
+                "server": self.config.proxy_server_url,
                 "username": username,
                 "password": self.config.proxy_password
             }
-            self.logger.debug(f"Using proxy: {self.config.server_url}")
+            self.logger.debug(f"Using proxy: {self.config.proxy_server_url}")
             self.logger.debug(f"Proxy username: {username}")
             self.logger.debug("Proxy config created successfully")
 
