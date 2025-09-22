@@ -14,12 +14,16 @@ class TestRYMScraper:
     @pytest.fixture
     def mock_config(self):
         """Create mock config for scraper."""
-        config = Mock()
-        config.max_retries = 3
-        config.retry_delay = 1
-        config.page_timeout = 30000
-        config.matching_threshold = 0.8
-        return config
+        from rym.core import RYMConfig
+        return RYMConfig(
+            max_retries=3,
+            retry_delay=1,
+            page_timeout=30000,
+            matching_threshold=0.8,
+            # Disable rate limiting for tests
+            min_request_interval=0.0,
+            humanize_request_interval=False
+        )
 
     @pytest.fixture
     def scraper(self, mock_config):

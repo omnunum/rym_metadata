@@ -62,6 +62,10 @@ class RYMConfig:
     retry_delay: float = 2.0
     page_timeout: int = 30000
 
+    # Rate limiting
+    min_request_interval: float = 3.0  # Minimum seconds between requests (0 = disabled)
+    humanize_request_interval: bool = True  # Add ±25% random jitter to intervals
+
     # Cache settings
     cache_enabled: bool = True
     cache_dir: str = '.rym_cache'
@@ -101,6 +105,10 @@ class RYMConfig:
             max_retries=config['max_retries'].get(3),
             retry_delay=config['retry_delay'].get(2.0),
             page_timeout=config['page_timeout'].get(30000),
+
+            # Rate limiting
+            min_request_interval=config['min_request_interval'].get(3.0),
+            humanize_request_interval=config['humanize_request_interval'].get(True),
 
             # Cache settings
             cache_enabled=config['cache_enabled'].get(True),
@@ -338,6 +346,7 @@ class RYMMetadataScraper:
         if self.cache_manager:
             return self.cache_manager.get_cache_info()
         return {'cache_enabled': False}
+
 
 
 

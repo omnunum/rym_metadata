@@ -55,6 +55,11 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
             'max_retries': 3,
             'retry_delay': 2.0,
             'page_timeout': 30000,  # 30 seconds
+
+            # Rate limiting
+            'min_request_interval': 3.0,  # Minimum seconds between requests (0 = disabled)
+            'humanize_request_interval': True,  # Add ±25% random jitter to intervals
+
             'auto_tag': False,
 
             # HTML Caching settings

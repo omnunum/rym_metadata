@@ -48,11 +48,16 @@ def mock_rym_config():
         proxy_username="testuser",
         proxy_password="testpass",
         proxy_use_tls=False,
-        session_type="none",
+        proxy_rotation_method='port',
+        auto_rotate_on_failure=True,
+        session_type="const",
         session_duration=600,
         session_id_length=10,
         port_range_start=10001,
-        port_range_end=10100
+        port_range_end=10100,
+        # Disable rate limiting for tests to avoid timing issues
+        min_request_interval=0.0,
+        humanize_request_interval=False
     )
 
 

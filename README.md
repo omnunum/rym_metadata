@@ -150,6 +150,10 @@ config = RYMConfig(
     retry_delay=2.0,                        # Base delay between retries
     page_timeout=30000,                     # Page load timeout (ms)
 
+    # Rate limiting (helps avoid getting blocked)
+    min_request_interval=3.0,               # Minimum seconds between requests (0 = disabled)
+    humanize_request_interval=True,         # Add ±25% random jitter
+
     # Bandwidth optimization
     resource_blocking_enabled=True,         # Block images/CSS for speed
 
@@ -211,6 +215,10 @@ rym:
 - `'sticky'`: Same session for duration, then change
 - `'rotate'`: New session per request
 
+**Rate limiting** helps avoid getting blocked:
+- `min_request_interval`: Minimum time between requests (default: 3 seconds)
+- `humanize_request_interval`: Adds ±25% jitter to look more human (default: enabled)
+
 **Examples:**
 ```python
 # Port-based proxy (e.g., rotating proxy with port-based IPs)
@@ -246,6 +254,8 @@ config = RYMConfig(
 | `session_type` | const | Session timing pattern ('const', 'sticky', 'rotate') |
 | `max_retries` | 3 | Number of retry attempts |
 | `page_timeout` | 30000 | Page load timeout (milliseconds) |
+| `min_request_interval` | 3.0 | Minimum seconds between requests (0 = disabled) |
+| `humanize_request_interval` | true | Add ±25% random jitter to request intervals |
 | `cache_enabled` | true | Enable HTML caching |
 | `cache_dir` | .rym_cache | Cache directory path |
 | `auto_tag` | false | Automatically tag albums during import |

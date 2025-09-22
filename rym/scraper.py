@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
+import random
 import re
+import time
 from difflib import SequenceMatcher
 from typing import Optional, Dict, Any, List
 from urllib.parse import quote
@@ -50,6 +52,9 @@ class RYMScraper:
         self.session_manager = session_manager
         self.browser_manager = browser_manager
         self.logger = logging.getLogger(__name__)
+
+        # Rate limiting
+        self._last_request_time: Optional[float] = None
 
     async def get_album_genres_and_descriptors(self, artist: str, album: str, year: Optional[int] = None, page: Any = None) -> Optional[Dict[str, Any]]:
         """Get genre and descriptor information for an album (beets-independent).
@@ -345,6 +350,9 @@ class RYMScraper:
                     # Set up resource blocking since we already have a valid session
                     await self.browser_manager.setup_resource_blocking(page)
 
+                # Apply rate limiting before making request
+                await self._wait_for_rate_limit()
+
                 # Navigate to URL
                 await page.goto(url, wait_until='domcontentloaded')
 
@@ -370,6 +378,9 @@ class RYMScraper:
 
                 # Basic validation
                 if html and len(html) > 1000:  # Ensure we got substantial content
+                    # Update request time for rate limiting
+                    self._update_request_time()
+
                     # Cache successful response
                     if self.cache_manager:
                         self.cache_manager.cache_html(url, html)
@@ -579,3 +590,30 @@ class RYMScraper:
         final_score = (artist_score * 0.4) + (album_score * 0.4) + (year_score * 0.2)
 
         return final_score
+
+    async def _wait_for_rate_limit(self) -> None:
+        """Wait if needed to respect rate limiting with optional jitter."""
+        if self.config.min_request_interval <= 0:
+            return  # Rate limiting disabled
+
+        if self._last_request_time is None:
+            return  # First request
+
+        elapsed = time.time() - self._last_request_time
+        base_delay = self.config.min_request_interval
+
+        if self.config.humanize_request_interval:
+            # Add ±25% jitter to make requests look more human
+            jitter = random.uniform(-0.25, 0.25) * base_delay
+            delay_needed = base_delay + jitter
+        else:
+            delay_needed = base_delay
+
+        wait_time = delay_needed - elapsed
+        if wait_time > 0:
+            self.logger.debug(f"Rate limiting: waiting {wait_time:.2f}s before next request")
+            await asyncio.sleep(wait_time)
+
+    def _update_request_time(self) -> None:
+        """Update the timestamp of the last request."""
+        self._last_request_time = time.time()
