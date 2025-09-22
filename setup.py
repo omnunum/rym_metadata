@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
 
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
-    name='beets-rym',
+    name='rym-metadata',
     version='1.0.0',
-    description='RateYourMusic genre scraper plugin for beets',
+    description='RateYourMusic metadata scraper - standalone library and beets plugin',
     author='RYM Metadata',
-    py_modules=['beetsplug_rym'],
+    packages=find_packages(),
+    py_modules=['beetsplug_rym_camoufox'],
     install_requires=[
-        'beets>=1.6.0',
+        # Core dependencies
         'aiohttp>=3.8.0',
         'beautifulsoup4>=4.11.0',
+        'lxml>=4.9.0',
+        'requests>=2.28.0',
+
+        # Browser automation
+        'camoufox[geoip]>=0.3.0',
+        'camoufox-captcha>=0.1.0',
+        'playwright>=1.40.0',
+
+        # Optional: beets for plugin functionality
+        'beets>=1.6.0',
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
