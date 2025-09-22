@@ -25,11 +25,11 @@ The standalone API is designed to be imported into any Python application withou
 
 ```python
 import asyncio
-from rym import RYMMetadataScraper, RYMConfig
+from rym import RYMMetadataScraper, RYMConfig, AlbumMetadata, ArtistMetadata
 
 # Create configuration
 config = RYMConfig(
-    proxy_enabled=True,
+    proxy_enabled=True,  # Note: defaults to False
     proxy_host="your.proxy.host",
     proxy_port=8080,
     proxy_username="your_username",
@@ -58,6 +58,15 @@ async def get_single_album():
         print(f"URL: {metadata.url}")                  # RYM album page URL
     else:
         print("Album not found on RYM")
+
+# Artist lookup
+async def get_single_artist():
+    artist_metadata = await scraper.get_artist_metadata("Radiohead")
+    if artist_metadata:
+        print(f"Artist Genres: {artist_metadata.genres}")
+        print(f"Artist URL: {artist_metadata.url}")
+    else:
+        print("Artist not found on RYM")
 ```
 
 #### Batch Processing
@@ -97,6 +106,18 @@ async def main():
 # Run the async function
 if __name__ == "__main__":
     result = asyncio.run(main())
+
+# Recommended: Use context manager for automatic cleanup
+async def main_with_context():
+    config = RYMConfig(proxy_enabled=True, ...)
+
+    async with RYMMetadataScraper(config) as scraper:
+        metadata = await scraper.get_album_metadata("Artist", "Album", 2000)
+        return metadata
+
+# Run with context manager
+if __name__ == "__main__":
+    result = asyncio.run(main_with_context())
 ```
 
 #### Configuration Options for Standalone
@@ -112,13 +133,13 @@ config = RYMConfig(
     proxy_use_tls=False,                    # True for HTTPS proxy
 
     # Session management for sticky IPs
-    session_type='sticky',                  # 'sticky', 'rotate', 'const', 'none'
+    session_type='sticky',                  # 'sticky', 'rotate', 'const', 'none' (default: 'none')
     session_duration=600,                   # Seconds to keep same IP
 
     # Caching (improves performance)
     cache_enabled=True,
     cache_dir=".rym_cache",
-    cache_expiry_days=7,                    # 0 = never expires
+    cache_expiry_days=7,                    # 0 = never expires (default: 0)
 
     # Retry behavior
     max_retries=3,
@@ -173,7 +194,7 @@ rym:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `proxy_enabled` | true | Enable/disable proxy usage |
+| `proxy_enabled` | false | Enable/disable proxy usage |
 | `proxy_host` | None | Proxy server hostname |
 | `proxy_port` | None | Proxy server port |
 | `proxy_username` | None | Proxy authentication username |
@@ -214,9 +235,15 @@ This will automatically add RYM genre information to newly imported albums.
 ## Data Fields
 
 ### Standalone Usage
+**AlbumMetadata:**
 - `metadata.genres`: List of genre strings
 - `metadata.descriptors`: List of descriptor strings
 - `metadata.url`: RYM album URL
+
+**ArtistMetadata:**
+- `metadata.genres`: List of genre strings
+- `metadata.descriptors`: List of descriptor strings
+- `metadata.url`: RYM artist URL
 
 ### Beets Plugin
 - `genres`: Semicolon-separated genres (written to files)
@@ -230,7 +257,7 @@ beet ls -f '$artist - $album: $descriptors'
 
 ## Streamrip Integration Example
 
-See `example_standalone.py` for complete integration examples. Basic pattern:
+Basic integration pattern:
 
 ```python
 from rym import RYMMetadataScraper, RYMConfig
