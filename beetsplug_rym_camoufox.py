@@ -34,12 +34,16 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
             'proxy_use_tls': False,    # True = https, False = http
             'proxy_cert_path': None,   # Path to proxy SSL certificate (optional)
 
+            # Proxy rotation method
+            'proxy_rotation_method': 'port',  # 'port' or 'username' - how IPs are rotated
+            'auto_rotate_on_failure': True,   # Auto-rotate when proxy errors occur
+
             # Port rotation for IP switching
             'port_range_start': 10001, # Starting port for rotation
             'port_range_end': 10100,   # Ending port for rotation
 
-            # Session management (for services that support it)
-            'session_type': 'none',    # 'sticky', 'rotate', 'const', 'none' - default to 'none' for generic proxies
+            # Session management (controls timing/request patterns)
+            'session_type': 'const',   # 'sticky', 'rotate', 'const' - when/how sessions change
             'session_duration': 600,   # Session duration in seconds (for sticky)
             'session_id_length': 10,   # Length of generated session IDs
 

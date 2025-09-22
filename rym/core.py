@@ -46,8 +46,12 @@ class RYMConfig:
     proxy_use_tls: bool = False
     proxy_cert_path: Optional[str] = None
 
-    # Session management
-    session_type: Literal['sticky', 'rotate', 'const', 'none'] = 'none'  # No session management by default
+    # Proxy rotation method
+    proxy_rotation_method: Literal['port', 'username'] = 'port'  # How IPs are rotated
+    auto_rotate_on_failure: bool = True  # Auto-rotate when proxy errors occur
+
+    # Session management (controls timing/request patterns)
+    session_type: Literal['sticky', 'rotate', 'const'] = 'const'  # When/how sessions change
     session_duration: int = 600
     session_id_length: int = 10
     port_range_start: int = 10001
@@ -82,8 +86,12 @@ class RYMConfig:
             proxy_use_tls=config['proxy_use_tls'].get(False),
             proxy_cert_path=config['proxy_cert_path'].get(),
 
+            # Proxy rotation method
+            proxy_rotation_method=config['proxy_rotation_method'].get('port'),
+            auto_rotate_on_failure=config['auto_rotate_on_failure'].get(True),
+
             # Session management
-            session_type=config['session_type'].get('none'),
+            session_type=config['session_type'].get('const'),
             session_duration=config['session_duration'].get(600),
             session_id_length=config['session_id_length'].get(10),
             port_range_start=config['port_range_start'].get(10001),

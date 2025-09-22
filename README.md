@@ -132,9 +132,13 @@ config = RYMConfig(
     proxy_password="password",
     proxy_use_tls=False,                    # True for HTTPS proxy
 
-    # Session management for sticky IPs
-    session_type='sticky',                  # 'sticky', 'rotate', 'const', 'none' (default: 'none')
-    session_duration=600,                   # Seconds to keep same IP
+    # Proxy rotation method
+    proxy_rotation_method='port',           # 'port' or 'username' - how IPs are rotated (default: 'port')
+    auto_rotate_on_failure=True,            # Auto-rotate when proxy errors occur (default: True)
+
+    # Session management (controls timing/request patterns)
+    session_type='const',                   # 'const', 'sticky', 'rotate' (default: 'const')
+    session_duration=600,                   # Seconds to keep same session (for sticky)
 
     # Caching (improves performance)
     cache_enabled=True,
@@ -190,6 +194,43 @@ rym:
   matching_threshold: 0.8
 ```
 
+## Proxy Rotation Methods
+
+**Port-based rotation** (`proxy_rotation_method='port'`):
+- Uses port rotation for IP changes (e.g., ports 10001-10100)
+- Sends clean username to proxy
+- Common with services that use port-based IP assignment
+
+**Username-based rotation** (`proxy_rotation_method='username'`):
+- Uses username suffixes for IP control (e.g., `user-const`, `user-session123`)
+- Keeps same port
+- Common with services like Bright Data
+
+**Session types** control timing/request patterns:
+- `'const'`: Consistent session behavior
+- `'sticky'`: Same session for duration, then change
+- `'rotate'`: New session per request
+
+**Examples:**
+```python
+# Port-based proxy (e.g., rotating proxy with port-based IPs)
+config = RYMConfig(
+    proxy_rotation_method='port',
+    proxy_host="proxy.example.com",
+    proxy_port=10001,  # Starting port
+    port_range_start=10001,
+    port_range_end=10100
+)
+
+# Username-based proxy (e.g., Bright Data)
+config = RYMConfig(
+    proxy_rotation_method='username',
+    proxy_host="proxy.brightdata.com",
+    proxy_port=8080,  # Single port
+    session_type='sticky'  # Controls username suffix timing
+)
+```
+
 ## Configuration Options
 
 | Option | Default | Description |
@@ -200,6 +241,9 @@ rym:
 | `proxy_username` | None | Proxy authentication username |
 | `proxy_password` | None | Proxy authentication password |
 | `proxy_use_tls` | false | Use HTTPS for proxy connection |
+| `proxy_rotation_method` | port | How IPs are rotated ('port' or 'username') |
+| `auto_rotate_on_failure` | true | Auto-rotate when proxy errors occur |
+| `session_type` | const | Session timing pattern ('const', 'sticky', 'rotate') |
 | `max_retries` | 3 | Number of retry attempts |
 | `page_timeout` | 30000 | Page load timeout (milliseconds) |
 | `cache_enabled` | true | Enable HTML caching |

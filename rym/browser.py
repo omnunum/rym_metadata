@@ -237,19 +237,20 @@ class BrowserManager:
         """Build proxy username with session control parameters."""
         base_username = self.config.proxy_username
 
-        # Handle session management based on type
-        if self.config.session_type == 'none':
-            # No session management - use base username
+        # For port-based rotation, always use clean username
+        if self.config.proxy_rotation_method == 'port':
             username = base_username
-        elif self.config.session_type == 'const':
-            # Use same peer consistently
-            username = f"{base_username}-const"
-        elif self.config.session_type == 'rotate':
-            # Rotate IP for each request (new session every time)
-            session_id = ''.join(random.choices(string.ascii_letters + string.digits, k=self.config.session_id_length))
-            username = f"{base_username}-session-{session_id}"
-        else:  # sticky (default)
-            username = self._get_sticky_session_username()
+        else:  # username-based rotation
+            # Handle session management based on type
+            if self.config.session_type == 'const':
+                # Use same peer consistently
+                username = f"{base_username}-const"
+            elif self.config.session_type == 'rotate':
+                # Rotate IP for each request (new session every time)
+                session_id = ''.join(random.choices(string.ascii_letters + string.digits, k=self.config.session_id_length))
+                username = f"{base_username}-session-{session_id}"
+            else:  # sticky
+                username = self._get_sticky_session_username()
 
         self.logger.debug(f"Using proxy username: {username}")
         return username

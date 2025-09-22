@@ -387,7 +387,7 @@ class RYMScraper:
 
                 # Check for specific proxy errors that indicate port should be rotated
                 if any(error in error_msg for error in ["PROXY_FORBIDDEN", "403", "PROXY_CONNECTION_FAILED", "CONNECTION_REFUSED"]):
-                    if self.session_manager:
+                    if self.session_manager and self.config.auto_rotate_on_failure:
                         self.logger.warning("Proxy error detected, marking port as blocked")
                         self.session_manager.mark_port_blocked()
                         if self.session_manager.rotate_port():
@@ -397,6 +397,9 @@ class RYMScraper:
                         else:
                             self.logger.error("No more ports available")
                             return None
+                    elif self.session_manager:
+                        self.logger.warning("Proxy error detected but auto_rotate_on_failure is disabled")
+                        return None
 
                 # Check for other errors
                 if "CERTIFICATE" in error_msg.upper():
