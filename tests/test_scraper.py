@@ -266,6 +266,96 @@ class TestRYMScraper:
         album, genre_data = result
         assert genre_data['genres'] == ['Electronic', 'House']
 
+    @pytest.mark.asyncio
+    async def test_album_genre_extraction_real_page(self, scraper_with_cache):
+        """Test album genre extraction with HTML that has multiple genres."""
+        # HTML with multiple genres (both primary and secondary)
+        album_html_with_multiple_genres = '''
+        <html>
+        <body>
+            <tr class="release_genres">
+                <td>
+                    <span class="release_pri_genres">
+                        <a class="genre" href="/genre/alternative-rock">Alternative Rock</a>
+                    </span>
+                    <a class="genre" href="/genre/britpop">Britpop</a>
+                    <a class="genre" href="/genre/grunge">Grunge</a>
+                </td>
+            </tr>
+            <tr class="release_descriptors">
+                <td>
+                    <meta content="melodic" />
+                    <meta content="energetic" />
+                </td>
+            </tr>
+        </body>
+        </html>
+        '''
+
+        url = "https://rateyourmusic.com/release/album/radiohead/pablo-honey/"
+
+        # Mock the fetch_url_with_retry to return our test HTML
+        with patch.object(scraper_with_cache, 'fetch_url_with_retry', return_value=album_html_with_multiple_genres):
+            result = await scraper_with_cache.extract_genres_from_url(url, Mock())
+
+        # Print results for verification
+        print(f"Album genres extracted: {result['genres']}")
+        print(f"Album descriptors extracted: {result['descriptors']}")
+
+        # The fix should now extract all genres, not just primary ones
+        assert 'Alternative Rock' in result['genres']
+        assert 'Britpop' in result['genres']
+        assert 'Grunge' in result['genres']
+        assert len(result['genres']) == 3
+        assert 'melodic' in result['descriptors']
+        assert 'energetic' in result['descriptors']
+
+    @pytest.mark.asyncio
+    async def test_artist_genre_extraction_real_page(self, scraper_with_cache):
+        """Test artist genre extraction with HTML matching actual RYM artist page structure."""
+        # HTML matching the actual structure shown in the screenshot
+        artist_html_with_genres = '''
+        <html>
+        <body>
+            <div class="artist_info_main">
+                <div class="info_hdr">Genres</div>
+                <div class="info_content">
+                    <a title="[Genre405]" class="genre" href="/genre/noise-rock/">Noise Rock</a>
+                    ", "
+                    <a title="[Genre116]" class="genre" href="/genre/alternative-rock/">Alternative Rock</a>
+                    ", "
+                    <a title="[Genre641]" class="genre" href="/genre/experimental-rock/">Experimental Rock</a>
+                    ", "
+                    <a title="[Genre332]" class="genre" href="/genre/post-punk/">Post-Punk</a>
+                    ", "
+                    <a title="[Genre103]" class="genre" href="/genre/indie-rock/">Indie Rock</a>
+                    ", "
+                    <a title="[Genre561]" class="genre" href="/genre/post-rock/">Post-Rock</a>
+                </div>
+            </div>
+        </body>
+        </html>
+        '''
+
+        url = "https://rateyourmusic.com/artist/radiohead/"
+
+        # Mock the fetch_url_with_retry to return our test HTML
+        with patch.object(scraper_with_cache, 'fetch_url_with_retry', return_value=artist_html_with_genres):
+            result = await scraper_with_cache.extract_artist_genres_from_url(url, Mock())
+
+        # Print results for verification
+        print(f"Artist genres extracted: {result['genres']}")
+        print(f"Artist descriptors extracted: {result['descriptors']}")
+
+        # Should extract all genres from the Genres section in artist_info_main
+        assert 'Noise Rock' in result['genres']
+        assert 'Alternative Rock' in result['genres']
+        assert 'Experimental Rock' in result['genres']
+        assert 'Post-Punk' in result['genres']
+        assert 'Indie Rock' in result['genres']
+        assert 'Post-Rock' in result['genres']
+        assert len(result['genres']) == 6
+
 
 
 

@@ -259,14 +259,12 @@ class RYMScraper:
             genres = []
             descriptors = []
 
-            # Extract genres from the release_pri_genres span
-            pri_genres = genre_row.find('span', class_='release_pri_genres')
-            if pri_genres:
-                genre_links = pri_genres.find_all('a', class_='genre')
-                for link in genre_links:
-                    genre_text = link.get_text(strip=True)
-                    if genre_text:
-                        genres.append(genre_text)
+            # Extract all genres from the release_genres row (both primary and secondary)
+            genre_links = genre_row.find_all('a', class_='genre')
+            for link in genre_links:
+                genre_text = link.get_text(strip=True)
+                if genre_text:
+                    genres.append(genre_text)
 
             # Look for descriptors in the release_descriptors row
             descriptor_row = soup.find('tr', class_='release_descriptors')
@@ -299,25 +297,23 @@ class RYMScraper:
             genres = []
             descriptors = []
 
-            # Look for genres in artist-specific sections only
+            # Look for genres in artist_info_main class
             # Find the "Genres" header and extract from the following info_content div
-            info_headers = soup.find_all('div', class_='info_hdr')
-            for header in info_headers:
-                if header.get_text(strip=True).lower() != 'genres':
-                    continue
-
-                # Find the next info_content div after the Genres header
-                info_content = header.find_next_sibling('div', class_='info_content')
-                if not info_content:
-                    break
-
-                genre_links = info_content.find_all('a', class_='genre')
-                for link in genre_links:
-                    genre_text = link.get_text(strip=True)
-                    if not genre_text:
-                        continue
-                    genres.append(genre_text)
-                break
+            artist_info_main = soup.find(class_='artist_info_main')
+            if artist_info_main:
+                info_headers = artist_info_main.find_all('div', class_='info_hdr')
+                for header in info_headers:
+                    if header.get_text(strip=True).lower() == 'genres':
+                        # Find the next info_content div after the Genres header
+                        info_content = header.find_next_sibling('div', class_='info_content')
+                        if info_content:
+                            genre_links = info_content.find_all('a', class_='genre')
+                            for link in genre_links:
+                                genre_text = link.get_text(strip=True)
+                                if not genre_text:
+                                    continue
+                                genres.append(genre_text)
+                        break
 
 
             return {
