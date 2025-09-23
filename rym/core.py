@@ -71,6 +71,9 @@ class RYMConfig:
     cache_dir: str = '.rym_cache'
     cache_expiry_days: int = 7  # Cache for a week by default
 
+    # Session state file path
+    session_state_file_path: Optional[str] = None  # Defaults to .rym_session_state.json in current directory
+
     # Resource blocking
     resource_blocking_enabled: bool = True
 
@@ -114,6 +117,9 @@ class RYMConfig:
             cache_enabled=config['cache_enabled'].get(True),
             cache_dir=config['cache_dir'].get('.rym_cache'),
             cache_expiry_days=config['cache_expiry_days'].get(0),
+
+            # Session state file path
+            session_state_file_path=config['session_state_file_path'].get(),
 
             # Resource blocking
             resource_blocking_enabled=config['resource_blocking_enabled'].get(True),
@@ -172,7 +178,7 @@ class RYMMetadataScraper:
         """Initialize proxy session manager."""
         self.session_manager = None
         if self.config.proxy_enabled and self.config.has_proxy_server:
-            self.session_manager = ProxySessionManager(self.config)
+            self.session_manager = ProxySessionManager(self.config, self.config.session_state_file_path)
 
     def _init_cache_manager(self) -> None:
         """Initialize HTML cache manager."""
