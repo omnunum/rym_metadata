@@ -5,6 +5,7 @@ that can be used standalone or integrated into other tools like streamrip.
 """
 
 import logging
+import os
 from typing import Dict, List, Optional, Tuple, Any, Literal
 from dataclasses import dataclass
 
@@ -184,8 +185,13 @@ class RYMMetadataScraper:
         """Initialize HTML cache manager."""
         self.cache_manager = None
         if self.config.cache_enabled:
+            # Make cache_dir absolute if it's not already
+            cache_dir = self.config.cache_dir
+            if not os.path.isabs(cache_dir):
+                cache_dir = os.path.abspath(cache_dir)
+
             self.cache_manager = HtmlCacheManager(
-                self.config.cache_dir,
+                cache_dir,
                 self.config.cache_expiry_days
             )
             # Clean up expired cache on startup
