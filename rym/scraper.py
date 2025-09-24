@@ -421,6 +421,9 @@ class RYMScraper:
 
     async def _search_album_url(self, search_url: str, page: Any, artist: str, album: str, year: Optional[int] = None) -> Optional[str]:
         """Search for album URL on RYM search page using fuzzy matching."""
+        self.logger.info(f"Searching RYM for: artist='{artist}', album='{album}', year={year}")
+        self.logger.info(f"Search URL: {search_url}")
+
         html = await self.fetch_url_with_retry(search_url, page)
         if not html:
             return None
@@ -452,7 +455,6 @@ class RYMScraper:
                     album_link = table.find('a', class_='searchpage')
                     if album_link:
                         candidates.append((score, candidate_info, album_link))
-                        self.logger.info(f"Result {i}: {candidate_info['artist']} - {candidate_info['album']} ({candidate_info['year']}) Score: {score:.3f}")
                     else:
                         self.logger.debug(f"Result {i}: No album link found in table")
 
@@ -462,15 +464,21 @@ class RYMScraper:
 
             # Sort by score (highest first) and check threshold
             candidates.sort(key=lambda x: x[0], reverse=True)
-            best_score, best_info, best_link = candidates[0]
 
-            self.logger.info(f"Best match: {best_info['artist']} - {best_info['album']} ({best_info['year']}) Score: {best_score:.3f}")
+            # Log top 3 matches at INFO level, rest at DEBUG level
+            for i, (score, candidate_info, album_link) in enumerate(candidates):
+                log_func = self.logger.info if i < 3 else self.logger.debug
+                log_func(f"Match #{i+1}: {candidate_info['artist']} - {candidate_info['album']} ({candidate_info['year']}) Score: {score:.3f}")
+
+            best_score, best_info, best_link = candidates[0]
 
             # Check if best match meets the threshold
             matching_threshold = self.config.matching_threshold
             if best_score < matching_threshold:
-                self.logger.info(f"Best match score {best_score:.3f} below threshold {matching_threshold:.3f}, rejecting match")
+                self.logger.info(f"Best match '{best_info['artist']} - {best_info['album']}' score {best_score:.3f} below threshold {matching_threshold:.3f}, rejecting match")
                 return None
+
+            self.logger.info(f"Selected match: '{best_info['artist']} - {best_info['album']} ({best_info['year']})' with score {best_score:.3f} (threshold: {matching_threshold:.3f})")
 
             relative_url = best_link['href']
             return f"http://rateyourmusic.com{relative_url}"

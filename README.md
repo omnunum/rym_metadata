@@ -145,6 +145,9 @@ config = RYMConfig(
     cache_dir=".rym_cache",
     cache_expiry_days=7,                    # 0 = never expires (default: 0)
 
+    # Session persistence (for external programs)
+    session_state_file_path="/path/to/your/app/.rym_session.json",  # Optional: custom session file location
+
     # Retry behavior
     max_retries=3,
     retry_delay=2.0,                        # Base delay between retries
@@ -258,6 +261,7 @@ config = RYMConfig(
 | `humanize_request_interval` | true | Add ±25% random jitter to request intervals |
 | `cache_enabled` | true | Enable HTML caching |
 | `cache_dir` | .rym_cache | Cache directory path |
+| `session_state_file_path` | None | Custom path for session state file (defaults to .rym_session_state.json in current directory) |
 | `auto_tag` | false | Automatically tag albums during import |
 | `matching_threshold` | 0.8 | Minimum similarity score (0.0-1.0) for accepting matches |
 
@@ -308,6 +312,34 @@ View beets data with:
 beet ls -f '$artist - $album: $genres'
 beet ls -f '$artist - $album: $descriptors'
 ```
+
+## Session Persistence for External Programs
+
+When importing RYM scraper into external programs, configure a consistent session file path to avoid repeated Cloudflare challenge solving:
+
+```python
+from rym import RYMMetadataScraper, RYMConfig
+
+# Configure session file path for your application
+config = RYMConfig(
+    proxy_enabled=True,
+    proxy_host="your.proxy.host",
+    proxy_port=8080,
+    proxy_username="your_username",
+    proxy_password="your_password",
+    # This ensures cookies persist across runs from different directories
+    session_state_file_path="/path/to/your/app/.rym_session.json"
+)
+
+async with RYMMetadataScraper(config) as scraper:
+    # Subsequent runs will reuse saved cookies instead of solving challenges
+    metadata = await scraper.get_album_metadata("Artist", "Album", 2000)
+```
+
+**Benefits:**
+- Avoids repeated Cloudflare challenge solving across program runs
+- Works regardless of current working directory
+- Shared session state between different scripts in your application
 
 ## Streamrip Integration Example
 
