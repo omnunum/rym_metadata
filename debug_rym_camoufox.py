@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from rym import RYMMetadataScraper
+import os
+from rym import RYMMetadataScraper, RYMConfig
 
 async def debug_album_async():
     """Test fetching genre info for a single album using the simplified API."""
@@ -10,16 +11,31 @@ async def debug_album_async():
     # Enable info level logging (use DEBUG for more verbose resource blocking logs)
     logging.basicConfig(level=logging.INFO)
 
+    # Create config with proxy settings from environment variables
+    config = RYMConfig(
+        proxy_enabled=True,
+        proxy_host=os.environ.get('PROXY_HOST'),
+        proxy_port=int(os.environ.get('PROXY_PORT')) if os.environ.get('PROXY_PORT') else None,
+        proxy_username=os.environ.get('PROXY_USERNAME'),
+        proxy_password=os.environ.get('PROXY_PASSWORD'),
+        auto_rotate_on_failure=True,
+        expand_parent_genres=True
+    )
+
     # Test with a well-known album
-    artist = "Kollektiv Turmstrasse"
-    album = "Musik Gewinnt Freunde Collection"
-    year = 2013
+    artist = "X Club."
+    album = "Stay With Me"
+    year = 2025
 
     print(f"Testing: {artist} - {album}")
+    if config.proxy_host and config.proxy_port:
+        print(f"Using proxy: {config.proxy_host}:{config.proxy_port}")
+    else:
+        print("No proxy configured (env vars not set)")
 
     try:
-        # Use the simplified API with context manager
-        async with RYMMetadataScraper() as scraper:  # Uses sensible defaults!
+        # Use the API with proxy-aware configuration
+        async with RYMMetadataScraper(config) as scraper:
             print("Fetching album data...")
             album_data = await scraper.get_album_metadata(artist, album, year)
 
@@ -55,11 +71,26 @@ async def debug_artist_only():
 
     logging.basicConfig(level=logging.INFO)
 
+    # Create config with proxy settings from environment variables
+    config = RYMConfig(
+        proxy_enabled=True,
+        proxy_host=os.environ.get('PROXY_HOST'),
+        proxy_port=int(os.environ.get('PROXY_PORT')) if os.environ.get('PROXY_PORT') else None,
+        proxy_username=os.environ.get('PROXY_USERNAME'),
+        proxy_password=os.environ.get('PROXY_PASSWORD'),
+        auto_rotate_on_failure=True,
+        expand_parent_genres=True
+    )
+
     artist = "Kollektiv Turmstrasse"
     print(f"Testing artist-only: {artist}")
+    if config.proxy_host and config.proxy_port:
+        print(f"Using proxy: {config.proxy_host}:{config.proxy_port}")
+    else:
+        print("No proxy configured (env vars not set)")
 
     try:
-        async with RYMMetadataScraper() as scraper:
+        async with RYMMetadataScraper(config) as scraper:
             artist_data = await scraper.get_artist_metadata(artist)
 
             if artist_data:
@@ -89,6 +120,17 @@ async def debug_batch_with_session():
 
     logging.basicConfig(level=logging.INFO)
 
+    # Create config with proxy settings from environment variables
+    config = RYMConfig(
+        proxy_enabled=True,
+        proxy_host=os.environ.get('PROXY_HOST'),
+        proxy_port=int(os.environ.get('PROXY_PORT')) if os.environ.get('PROXY_PORT') else None,
+        proxy_username=os.environ.get('PROXY_USERNAME'),
+        proxy_password=os.environ.get('PROXY_PASSWORD'),
+        auto_rotate_on_failure=True,
+        expand_parent_genres=True
+    )
+
     # Test multiple albums with one browser session
     test_items = [
         ("Kollektiv Turmstrasse", "Musik Gewinnt Freunde Collection", 2013),
@@ -97,10 +139,14 @@ async def debug_batch_with_session():
     ]
 
     print("Testing batch processing with persistent session...")
+    if config.proxy_host and config.proxy_port:
+        print(f"Using proxy: {config.proxy_host}:{config.proxy_port}")
+    else:
+        print("No proxy configured (env vars not set)")
 
     try:
         # One browser session for all requests - very efficient!
-        async with RYMMetadataScraper() as scraper:
+        async with RYMMetadataScraper(config) as scraper:
             for i, (artist, album, year) in enumerate(test_items):
                 print(f"\nProcessing {i+1}: {artist} - {album}")
 

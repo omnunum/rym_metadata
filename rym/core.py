@@ -24,6 +24,7 @@ class AlbumMetadata:
     genres: List[str]
     descriptors: List[str]
     url: Optional[str] = None
+    album_type: Optional[str] = "album"
 
 
 @dataclass
@@ -81,6 +82,10 @@ class RYMConfig:
     # Search matching
     matching_threshold: float = 0.8  # Minimum similarity score (0.0-1.0) for accepting matches
 
+    # Genre expansion
+    expand_parent_genres: bool = True  # Automatically add parent genres to album metadata
+    genre_cache_expiry_days: int = 30  # How long to cache genre hierarchy data (0 = never expire)
+
     @classmethod
     def from_beets_config(cls, config) -> 'RYMConfig':
         """Create RYMConfig from beets configuration object."""
@@ -127,6 +132,10 @@ class RYMConfig:
 
             # Search matching
             matching_threshold=config['matching_threshold'].get(0.8),
+
+            # Genre expansion
+            expand_parent_genres=config['expand_parent_genres'].get(True),
+            genre_cache_expiry_days=config['genre_cache_expiry_days'].get(30),
         )
 
     @property
@@ -171,9 +180,6 @@ class RYMMetadataScraper:
         self._init_browser_manager()
         self._init_scraper()
 
-        # Browser session management
-        self._browser = None
-        self._page = None
 
     def _init_session_manager(self) -> None:
         """Initialize proxy session manager."""
@@ -194,9 +200,7 @@ class RYMMetadataScraper:
                 cache_dir,
                 self.config.cache_expiry_days
             )
-            # Clean up expired cache on startup
-            if self.config.cache_expiry_days > 0:
-                self.cache_manager.cleanup_expired()
+            # Note: HTML cache cleanup disabled - not currently used and interferes with genre hierarchy cache
 
     def _init_browser_manager(self) -> None:
         """Initialize browser manager."""
@@ -213,61 +217,29 @@ class RYMMetadataScraper:
 
     async def __aenter__(self):
         """Async context manager entry - start browser session."""
-        await self._start_browser_session()
+        await self.scraper.__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit - cleanup browser session."""
-        await self._cleanup_browser_session()
+        await self.scraper.__aexit__(exc_type, exc_val, exc_tb)
 
-    async def _start_browser_session(self) -> None:
-        """Start a persistent browser session for multiple requests."""
-        if self._browser is not None:
-            return  # Already started
 
-        # Get browser options
-        browser_options = self.browser_manager.get_browser_options()
-
-        try:
-            self._browser = await AsyncCamoufox(**browser_options).__aenter__()
-            self._page = await self._browser.new_page()
-            self.logger.debug("Browser session started successfully")
-        except Exception as e:
-            self.logger.error(f"Failed to start browser session: {e}")
-            self._browser = None
-            self._page = None
-            raise
-
-    async def _cleanup_browser_session(self) -> None:
-        """Clean up the persistent browser session."""
-        if self._browser is not None:
-            try:
-                await self._browser.__aexit__(None, None, None)
-                self.logger.debug("Browser session cleaned up")
-            except Exception as e:
-                self.logger.warning(f"Error during browser cleanup: {e}")
-            finally:
-                self._browser = None
-                self._page = None
-
-    async def get_album_metadata(self, artist: str, album: str, year: Optional[int] = None) -> Optional[AlbumMetadata]:
+    async def get_album_metadata(self, artist: str, album: str, year: Optional[int] = None, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> Optional[AlbumMetadata]:
         """Get metadata for a single album.
 
         Args:
             artist: Artist name
             album: Album name
             year: Optional album year for better search matching
+            album_type: Type of release ("album", "single", "ep", "compilation")
 
         Returns:
             AlbumMetadata object or None if not found
         """
-        # Ensure browser session is started
-        if self._browser is None:
-            await self._start_browser_session()
-
         try:
-            # Use the existing method that properly handles year parameter
-            genre_data = await self.scraper.get_album_genres_and_descriptors(artist, album, year, self._page)
+            # Use the refactored method (no page parameter needed)
+            genre_data = await self.scraper.get_album_genres_and_descriptors(artist, album, year, album_type)
 
             if not genre_data:
                 return None
@@ -276,14 +248,15 @@ class RYMMetadataScraper:
             descriptors = genre_data.get('descriptors', [])
 
             # Build URL for reference (try direct first)
-            url = self.scraper.build_direct_url(artist, album)
+            url = self.scraper.build_direct_url(artist, album, album_type)
 
             return AlbumMetadata(
                 artist=artist,
                 album=album,
                 genres=genres,
                 descriptors=descriptors,
-                url=url
+                url=url,
+                album_type=album_type
             )
 
         except Exception as e:
@@ -299,13 +272,9 @@ class RYMMetadataScraper:
         Returns:
             ArtistMetadata object or None if not found
         """
-        # Ensure browser session is started
-        if self._browser is None:
-            await self._start_browser_session()
-
         try:
-            # Use the new artist method
-            genre_data = await self.scraper.get_artist_genres_and_descriptors(artist, self._page)
+            # Use the refactored method (no page parameter needed)
+            genre_data = await self.scraper.get_artist_genres_and_descriptors(artist)
 
             if not genre_data:
                 return None
@@ -327,11 +296,11 @@ class RYMMetadataScraper:
             self.logger.error(f"Error getting metadata for artist {artist}: {e}")
             return None
 
-    async def get_multiple_albums_metadata(self, albums: List[Tuple[str, str, Optional[int]]]) -> List[Optional[AlbumMetadata]]:
+    async def get_multiple_albums_metadata(self, albums: List[Tuple[str, str, Optional[int], Optional[Literal["album", "single", "ep", "compilation"]]]]) -> List[Optional[AlbumMetadata]]:
         """Get metadata for multiple albums.
 
         Args:
-            albums: List of (artist, album, year) tuples (year can be None)
+            albums: List of (artist, album, year, album_type) tuples (year and album_type can be None)
 
         Returns:
             List of AlbumMetadata objects (None for failed lookups)
@@ -341,9 +310,16 @@ class RYMMetadataScraper:
             if len(album_info) == 2:
                 artist, album = album_info
                 year = None
-            else:
+                album_type = "album"
+            elif len(album_info) == 3:
                 artist, album, year = album_info
-            result = await self.get_album_metadata(artist, album, year)
+                album_type = "album"
+            else:
+                artist, album, year, album_type = album_info
+                if album_type is None:
+                    album_type = "album"
+
+            result = await self.get_album_metadata(artist, album, year, album_type)
             results.append(result)
         return results
 

@@ -16,3 +16,6 @@ urllib3>=1.26.0
 
 # Data parsing and utilities
 lxml>=4.9.0
+
+# Retry and resilience
+tenacity>=8.0.0

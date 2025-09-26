@@ -149,17 +149,6 @@ class BrowserManager:
         blocked_domains_list = ', '.join(sorted(blocked_domains))
         self.logger.info(f"Set up targeted resource blocking. Blocking domains: {blocked_domains_list}")
 
-    def log_bandwidth_stats(self) -> None:
-        """Log bandwidth optimization statistics."""
-        if self.bandwidth_stats['total_requests'] > 0:
-            blocked_pct = (self.bandwidth_stats['blocked_requests'] / self.bandwidth_stats['total_requests']) * 100
-            self.logger.info(f"Bandwidth optimization: {self.bandwidth_stats['blocked_requests']}/{self.bandwidth_stats['total_requests']} requests blocked ({blocked_pct:.1f}%)")
-
-            if self.bandwidth_stats['blocked_types']:
-                blocked_summary = []
-                for resource_type, count in self.bandwidth_stats['blocked_types'].items():
-                    blocked_summary.append(f"{resource_type}: {count}")
-                self.logger.debug(f"Blocked by type: {', '.join(blocked_summary)}")
 
     async def solve_cloudflare_challenge(self, page: Any, url: str) -> bool:
         """Solve Cloudflare challenge using camoufox-captcha library."""
@@ -178,9 +167,6 @@ class BrowserManager:
                     if cookies:
                         self.session_manager.set_cookies(cookies)
 
-                # Set up resource blocking now that challenge is solved
-                await self.setup_resource_blocking(page)
-
                 return True
             else:
                 self.logger.warning("Failed to solve Cloudflare challenge")
@@ -198,18 +184,21 @@ class BrowserManager:
             for cookie in cookie_list:
                 cookies[cookie['name']] = cookie['value']
 
+            # Log all cookies first for debugging
+            self.logger.debug(f"All available cookies: {list(cookies.keys())}")
+
             # Filter for Cloudflare-specific cookies
             cf_cookies = {k: v for k, v in cookies.items()
-                         if k.startswith(('cf_', '__cf', '__cfduid'))}
+                         if k.startswith(('cf_', '__cf', '_cf', '__cfduid', 'sec_'))}
 
-            self.logger.debug(f"Extracted {len(cf_cookies)} Cloudflare cookies")
+            self.logger.debug(f"Extracted {len(cf_cookies)} Cloudflare cookies: {list(cf_cookies.keys())}")
             return cf_cookies
         except Exception as e:
             self.logger.error(f"Error extracting cookies: {e}")
             return {}
 
-    async def apply_session_cookies(self, page: Any) -> None:
-        """Apply saved session cookies to the async page."""
+    async def apply_session_cookies_to_context(self, browser_context: Any) -> None:
+        """Apply saved session cookies to the browser context (all pages inherit automatically)."""
         if not self.session_manager:
             return
 
@@ -218,7 +207,7 @@ class BrowserManager:
             return
 
         try:
-            # Convert dict to cookie format for page
+            # Convert dict to cookie format for browser context
             cookie_list = []
             for name, value in cookies.items():
                 cookie_list.append({
@@ -228,10 +217,20 @@ class BrowserManager:
                     'path': '/'
                 })
 
-            await page.context.add_cookies(cookie_list)
-            self.logger.debug(f"Applied {len(cookies)} session cookies")
+            self.logger.debug(f"Applying {len(cookies)} cookies to browser context: {list(cookies.keys())}")
+            await browser_context.add_cookies(cookie_list)
+            self.logger.info(f"Successfully applied {len(cookies)} session cookies to browser context")
+
+            # Verify cookies were applied by reading them back
+            context_cookies = await browser_context.cookies()
+            cf_context_cookies = [c for c in context_cookies if c['name'].startswith(('cf_', '__cf', '_cf', '__cfduid'))]
+            self.logger.debug(f"Browser context now has {len(cf_context_cookies)} Cloudflare cookies")
+
         except Exception as e:
-            self.logger.error(f"Error applying cookies: {e}")
+            self.logger.error(f"Error applying cookies to browser context: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+
 
     def _build_proxy_username(self) -> str:
         """Build proxy username with session control parameters."""

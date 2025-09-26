@@ -65,7 +65,11 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
             # HTML Caching settings
             'cache_enabled': True,     # Enable/disable HTML caching
             'cache_dir': '.rym_cache', # Cache directory path
-            'cache_expiry_days': 0,    # Cache expiration in days (0 = never expires)
+            'cache_expiry_days': 7,    # HTML cache expiration in days (changed from 0 to avoid constant re-downloading)
+
+            # Genre expansion settings
+            'expand_parent_genres': True,  # Automatically add parent genres to album metadata
+            'genre_cache_expiry_days': 14,  # Genre hierarchy cache expiration in days (genres rarely change)
 
             # Resource blocking settings for bandwidth optimization
             'resource_blocking_enabled': True,  # Enable targeted resource blocking (blocks e.snmc.io and asset paths)
@@ -106,9 +110,7 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
                 self.rym_config.cache_dir,
                 self.rym_config.cache_expiry_days
             )
-            # Clean up expired cache on startup
-            if self.rym_config.cache_expiry_days > 0:
-                self.cache_manager.cleanup_expired()
+            # Note: HTML cache cleanup disabled - not currently used and interferes with genre hierarchy cache
 
     def _init_browser_manager(self):
         """Initialize browser manager."""
@@ -247,8 +249,7 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
                         ui.print_(f"[{i}/{len(albums_to_process)}] Error processing {album.albumartist} - {album.album}: {e}")
                         self._log.error(f"Error processing album: {e}")
 
-                # Log bandwidth optimization statistics
-                self.browser_manager.log_bandwidth_stats()
+                # Bandwidth optimization statistics are logged automatically during resource blocking
 
         except Exception as e:
             ui.print_(f"Error initializing browser: {e}")
