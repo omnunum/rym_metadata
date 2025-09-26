@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple, Any, Literal
 from dataclasses import dataclass
 
 from .session_manager import ProxySessionManager
-from .cache_manager import HtmlCacheManager
+from .content_cache_manager import ContentCacheManager
 from .browser import BrowserManager
 from .scraper import RYMScraper
 
@@ -188,7 +188,7 @@ class RYMMetadataScraper:
             self.session_manager = ProxySessionManager(self.config, self.config.session_state_file_path)
 
     def _init_cache_manager(self) -> None:
-        """Initialize HTML cache manager."""
+        """Initialize content cache manager."""
         self.cache_manager = None
         if self.config.cache_enabled:
             # Make cache_dir absolute if it's not already
@@ -196,11 +196,7 @@ class RYMMetadataScraper:
             if not os.path.isabs(cache_dir):
                 cache_dir = os.path.abspath(cache_dir)
 
-            self.cache_manager = HtmlCacheManager(
-                cache_dir,
-                self.config.cache_expiry_days
-            )
-            # Note: HTML cache cleanup disabled - not currently used and interferes with genre hierarchy cache
+            self.cache_manager = ContentCacheManager(cache_dir)
 
     def _init_browser_manager(self) -> None:
         """Initialize browser manager."""

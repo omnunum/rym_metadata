@@ -10,7 +10,7 @@ from .core import (
 
 # Internal components (for advanced usage)
 from .session_manager import ProxySessionManager
-from .cache_manager import HtmlCacheManager
+from .content_cache_manager import ContentCacheManager
 from .browser import BrowserManager
 from .scraper import RYMScraper
 from .genre_manager import GenreHierarchyManager
@@ -24,7 +24,7 @@ __all__ = [
 
     # Internal components (for advanced usage)
     'ProxySessionManager',
-    'HtmlCacheManager',
+    'ContentCacheManager',
     'BrowserManager',
     'RYMScraper',
     'GenreHierarchyManager',

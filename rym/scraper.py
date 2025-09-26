@@ -5,7 +5,6 @@ import logging
 import random
 import re
 import time
-import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Optional, Dict, Any, List, Literal
@@ -15,7 +14,7 @@ from bs4 import BeautifulSoup
 from camoufox import AsyncCamoufox
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from .cache_manager import HtmlCacheManager
+from .content_cache_manager import ContentCacheManager
 from .session_manager import ProxySessionManager
 from .browser import BrowserManager
 from .genre_manager import GenreHierarchyManager
@@ -46,7 +45,7 @@ def _deduplicate_list(items: List[str]) -> List[str]:
 class RYMScraper:
     """Handles core scraping operations for RYM album data."""
 
-    def __init__(self, config: Any, cache_manager: Optional[HtmlCacheManager] = None,
+    def __init__(self, config: Any, cache_manager: Optional[ContentCacheManager] = None,
                  session_manager: Optional[ProxySessionManager] = None,
                  browser_manager: Optional[BrowserManager] = None) -> None:
         self.config = config
@@ -393,6 +392,14 @@ class RYMScraper:
         Returns:
             Dict with 'genres' and 'descriptors' lists, or None if not found
         """
+        # Check content cache first
+        if self.cache_manager:
+            cached_html = self.cache_manager.get_cached_content("release", artist, album)
+            if cached_html:
+                genre_data = self._extract_genres_from_html(cached_html)
+                if genre_data.get('genres') or genre_data.get('descriptors'):
+                    return genre_data
+
         page = await self._create_page()
         try:
             # Try direct URL first
@@ -405,16 +412,23 @@ class RYMScraper:
             genres = genre_data.get('genres', [])
             descriptors = genre_data.get('descriptors', [])
 
-            # If direct URL fails, try artist discography search
+            # Cache successful result
+            if html and (genres or descriptors) and self.cache_manager:
+                self.cache_manager.save_content("release", artist, html, album)
+
+            # If direct URL fails, try artist ID cache + discography search
             if not genres:
-                self.logger.info(f"Direct URL failed, trying artist discography search for {artist} - {album}")
+                self.logger.info(f"Direct URL failed, checking artist ID cache for {artist}")
 
-                # Step 1: Get artist page URL
-                artist_page_url = await self._get_artist_page_url(artist, page)
+                # Step 1: Check artist ID cache first
+                cached_artist_id = None
+                if self.cache_manager:
+                    cached_artist_id = self.cache_manager.lookup_artist_id(artist)
 
-                if artist_page_url:
-                    # Step 2: Search artist's discography
-                    album_url = await self._search_artist_discography(artist_page_url, album, page, year)
+                if cached_artist_id:
+                    # Use cached artist ID for direct discography search
+                    self.logger.info(f"Using cached artist ID for discography search")
+                    album_url = await self._search_discography_by_artist_id(cached_artist_id, album, page, year)
 
                     if album_url:
                         # Fetch album page and extract genres
@@ -422,6 +436,32 @@ class RYMScraper:
                         genre_data = self._extract_genres_from_html(html) if html else {'genres': [], 'descriptors': []}
                         genres = genre_data.get('genres', [])
                         descriptors = genre_data.get('descriptors', [])
+
+                        # Cache successful result
+                        if html and (genres or descriptors) and self.cache_manager:
+                            self.cache_manager.save_content("release", artist, html, album)
+
+                # If artist ID cache miss or discography search failed, try full artist page approach
+                if not genres:
+                    self.logger.info(f"Artist ID cache miss or search failed, trying full artist page approach for {artist} - {album}")
+
+                    # Step 2: Get artist page URL
+                    artist_page_url = await self._get_artist_page_url(artist, page)
+
+                    if artist_page_url:
+                        # Step 3: Search artist's discography
+                        album_url = await self._search_artist_discography(artist_page_url, album, page, year)
+
+                        if album_url:
+                            # Fetch album page and extract genres
+                            html = await self._fetch_url(album_url, page)
+                            genre_data = self._extract_genres_from_html(html) if html else {'genres': [], 'descriptors': []}
+                            genres = genre_data.get('genres', [])
+                            descriptors = genre_data.get('descriptors', [])
+
+                            # Cache successful result
+                            if html and (genres or descriptors) and self.cache_manager:
+                                self.cache_manager.save_content("release", artist, html, album)
 
                 # No more fallbacks - if discography search fails, we're done
                 if not genres:
@@ -446,6 +486,14 @@ class RYMScraper:
         Returns:
             Dict with 'genres' and 'descriptors' lists, or None if not found
         """
+        # Check content cache first
+        if self.cache_manager:
+            cached_html = self.cache_manager.get_cached_content("artist", artist)
+            if cached_html:
+                genre_data = self._extract_artist_genres_from_html(cached_html)
+                if genre_data.get('genres') or genre_data.get('descriptors'):
+                    return genre_data
+
         page = await self._create_page()
         try:
             # Try direct artist URL first
@@ -457,6 +505,10 @@ class RYMScraper:
             genre_data = self._extract_artist_genres_from_html(html) if html else {'genres': [], 'descriptors': []}
             genres = genre_data.get('genres', [])
             descriptors = genre_data.get('descriptors', [])
+
+            # Cache successful result
+            if html and (genres or descriptors) and self.cache_manager:
+                self.cache_manager.save_content("artist", artist, html)
 
             # If direct URL fails, fall back to search
             if not genres:
@@ -475,6 +527,10 @@ class RYMScraper:
                 genre_data = self._extract_artist_genres_from_html(html) if html else {'genres': [], 'descriptors': []}
                 genres = genre_data.get('genres', [])
                 descriptors = genre_data.get('descriptors', [])
+
+                # Cache successful result
+                if html and (genres or descriptors) and self.cache_manager:
+                    self.cache_manager.save_content("artist", artist, html)
 
             return {'genres': genres, 'descriptors': descriptors}
 
@@ -524,15 +580,7 @@ class RYMScraper:
 
     def build_direct_url(self, artist: str, album_name: str, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> str:
         """Build direct RYM URL for the given artist and album."""
-
-        def clean_for_url(text: str) -> str:
-            # Normalize unicode and remove accents
-            text = unicodedata.normalize('NFD', text)
-            text = ''.join(char for char in text if unicodedata.category(char) != 'Mn')
-            # Remove non-word characters and convert to lowercase
-            text = re.sub(r'[^\w\s]', '', text.lower()).strip()
-            # Replace spaces with hyphens
-            return re.sub(r'\s+', '-', text)
+        from .content_cache_manager import ContentCacheManager
 
         # Map album types to RYM URL paths
         type_mapping = {
@@ -547,8 +595,20 @@ class RYMScraper:
         if album_type.lower() not in type_mapping:
             self.logger.warning(f"Unknown album_type '{album_type}', defaulting to 'album'")
 
-        artist_clean = clean_for_url(artist)
-        album_clean = clean_for_url(album_name)
+        # Use normalize_text for URL building
+        artist_clean = ContentCacheManager.normalize_text(
+            artist,
+            remove_accents=True,
+            lowercase=True,
+            remove_punctuation=True
+        ).replace(' ', '-')
+
+        album_clean = ContentCacheManager.normalize_text(
+            album_name,
+            remove_accents=True,
+            lowercase=True,
+            remove_punctuation=True
+        ).replace(' ', '-')
 
         # Use HTTP since HTTPS has proxy issues
         return f"{BASE_URL}/release/{rym_type}/{artist_clean}/{album_clean}/"
@@ -556,17 +616,16 @@ class RYMScraper:
 
     def build_artist_url(self, artist: str) -> str:
         """Build direct RYM artist URL for the given artist."""
+        from .content_cache_manager import ContentCacheManager
 
-        def clean_for_url(text: str) -> str:
-            # Normalize unicode and remove accents
-            text = unicodedata.normalize('NFD', text)
-            text = ''.join(char for char in text if unicodedata.category(char) != 'Mn')
-            # Remove non-word characters and convert to lowercase
-            text = re.sub(r'[^\w\s]', '', text.lower()).strip()
-            # Replace spaces with hyphens
-            return re.sub(r'\s+', '-', text)
+        # Use normalize_text for URL building
+        artist_clean = ContentCacheManager.normalize_text(
+            artist,
+            remove_accents=True,
+            lowercase=True,
+            remove_punctuation=True
+        ).replace(' ', '-')
 
-        artist_clean = clean_for_url(artist)
         return f"{BASE_URL}/artist/{artist_clean}"
 
     def build_artist_search_url(self, artist: str) -> str:
@@ -611,6 +670,11 @@ class RYMScraper:
             # Look for artist-specific elements
             if soup.find('div', class_='artist_info_main') or soup.find('div', id='discography'):
                 self.logger.info(f"Direct artist URL successful: {direct_artist_url}")
+
+                # Cache artist page content
+                if self.cache_manager:
+                    self.cache_manager.save_content("artist", artist, html)
+
                 return direct_artist_url
 
         # Direct URL failed, try artist search
@@ -621,6 +685,13 @@ class RYMScraper:
         found_url = await self._search_artist_url(search_url, page, artist)
         if found_url:
             self.logger.info(f"Found artist via search: {found_url}")
+
+            # Fetch and cache the artist page content
+            if self.cache_manager:
+                artist_html = await self._fetch_url(found_url, page)
+                if artist_html:
+                    self.cache_manager.save_content("artist", artist, artist_html)
+
             return found_url
 
         self.logger.warning(f"Could not find artist page for: {artist}")
@@ -821,40 +892,22 @@ class RYMScraper:
             return f"{BASE_URL}{url}"
         return url
 
-    async def _search_artist_discography(self, artist_page_url: str, album: str, page: Any, year: Optional[int] = None) -> Optional[str]:
-        """Search artist's discography for the album using direct POST request."""
-        self.logger.info(f"Searching discography on artist page: {artist_page_url}")
-        self.logger.info(f"Looking for album: '{album}' (year: {year})")
+    async def _search_discography_by_artist_id(self, artist_id: str, album: str, page: Any, year: Optional[int] = None) -> Optional[str]:
+        """Search artist's discography using artist ID directly (no page navigation needed).
+
+        Args:
+            artist_id: RYM artist ID
+            album: Album name to search for
+            page: Playwright page (for browser context)
+            year: Optional album year for better matching
+
+        Returns:
+            Album URL if found, None otherwise
+        """
+        self.logger.info(f"Searching discography for artist_id={artist_id}, album='{album}' (year: {year})")
 
         try:
-            # Navigate to the artist page directly (needed to extract artist_id and get cookies)
-            await self._wait_for_rate_limit()
-            await page.goto(artist_page_url, wait_until='domcontentloaded')
-
-            # Wait for network to be idle
-            try:
-                await page.wait_for_load_state('networkidle', timeout=10000)
-            except Exception:
-                await asyncio.sleep(2)
-
-            # Debug: Check current page URL and title to ensure we're where we expect
-            current_url = page.url
-            try:
-                page_title = await page.title()
-                self.logger.info(f"After navigation - URL: {current_url}, Title: {page_title}")
-            except:
-                self.logger.info(f"After navigation - URL: {current_url}")
-
-            # Get page HTML to extract artist ID
-            html = await page.content()
-            artist_id = self._extract_artist_id_from_html(html)
-
-            if not artist_id:
-                self.logger.warning("Could not extract artist ID from page, discography search failed")
-                return None
-
             # Use POST approach to search discography
-            self.logger.info("Searching discography via direct POST request")
             browser_context = page.context
             candidates = await self._search_discography_via_post(browser_context, artist_id, album)
 
@@ -862,8 +915,65 @@ class RYMScraper:
             if candidates:
                 return self._score_discography_candidates(candidates, album, year)
             else:
-                self.logger.info("POST discography search returned no results")
+                self.logger.info("Discography search returned no results")
                 return None
+
+        except Exception as e:
+            self.logger.error(f"Error during discography search by artist ID: {e}")
+            return None
+
+    async def _search_artist_discography(self, artist_page_url: str, album: str, page: Any, year: Optional[int] = None) -> Optional[str]:
+        """Search artist's discography for the album using direct POST request."""
+        self.logger.info(f"Searching discography on artist page: {artist_page_url}")
+        self.logger.info(f"Looking for album: '{album}' (year: {year})")
+
+        try:
+            # Extract artist name from URL to check cache
+            artist_name = None
+            if "/artist/" in artist_page_url:
+                url_artist = artist_page_url.split("/artist/")[-1].rstrip("/")
+                if url_artist:
+                    # Convert URL format back to readable name (rough approximation)
+                    artist_name = url_artist.replace("-", " ").title()
+
+            # Check artist ID cache first
+            artist_id = None
+            if self.cache_manager and artist_name:
+                artist_id = self.cache_manager.lookup_artist_id(artist_name)
+
+            if not artist_id:
+                # Navigate to the artist page to extract artist_id
+                await self._wait_for_rate_limit()
+                await page.goto(artist_page_url, wait_until='domcontentloaded')
+
+                # Wait for network to be idle
+                try:
+                    await page.wait_for_load_state('networkidle', timeout=10000)
+                except Exception:
+                    await asyncio.sleep(2)
+
+                # Debug: Check current page URL and title to ensure we're where we expect
+                current_url = page.url
+                try:
+                    page_title = await page.title()
+                    self.logger.info(f"After navigation - URL: {current_url}, Title: {page_title}")
+                except:
+                    self.logger.info(f"After navigation - URL: {current_url}")
+
+                # Get page HTML to extract artist ID
+                html = await page.content()
+                artist_id = self._extract_artist_id_from_html(html)
+
+                if not artist_id:
+                    self.logger.warning("Could not extract artist ID from page, discography search failed")
+                    return None
+
+                # Cache the artist ID for future use
+                if self.cache_manager and artist_name:
+                    self.cache_manager.save_artist_id(artist_name, artist_id)
+
+            # Use the extracted discography search method
+            return await self._search_discography_by_artist_id(artist_id, album, page, year)
 
         except Exception as e:
             self.logger.error(f"Error during discography search: {e}")

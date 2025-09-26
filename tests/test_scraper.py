@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, Mock, patch
 from rym.scraper import RYMScraper
-from rym.cache_manager import HtmlCacheManager
+from rym.content_cache_manager import ContentCacheManager
 from rym.session_manager import ProxySessionManager
 from rym.browser import BrowserManager
 
@@ -38,7 +38,7 @@ class TestRYMScraper:
     @pytest.fixture
     def scraper_with_cache(self, mock_config, temp_cache_dir):
         """Create scraper with cache manager."""
-        cache_manager = HtmlCacheManager(str(temp_cache_dir), expiry_days=0)
+        cache_manager = ContentCacheManager(str(temp_cache_dir))
         return RYMScraper(
             config=mock_config,
             cache_manager=cache_manager,

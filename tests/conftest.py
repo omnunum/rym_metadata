@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock
 from rym.core import RYMConfig
-from rym.cache_manager import HtmlCacheManager
+from rym.content_cache_manager import ContentCacheManager
 
 
 @pytest.fixture
@@ -66,7 +66,7 @@ def mock_rym_config():
 @pytest.fixture
 def cache_manager(temp_cache_dir):
     """Create cache manager instance for testing."""
-    return HtmlCacheManager(str(temp_cache_dir), expiry_days=0)
+    return ContentCacheManager(str(temp_cache_dir))
 
 
 @pytest.fixture

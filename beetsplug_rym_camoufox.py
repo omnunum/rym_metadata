@@ -13,7 +13,7 @@ from beets.library import Album
 from camoufox import AsyncCamoufox
 
 from rym.session_manager import ProxySessionManager
-from rym.cache_manager import HtmlCacheManager
+from rym.content_cache_manager import ContentCacheManager
 from rym.browser import BrowserManager
 from rym.scraper import RYMScraper
 
@@ -103,12 +103,11 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
             self.session_manager = ProxySessionManager(self.rym_config)
 
     def _init_cache_manager(self):
-        """Initialize HTML cache manager."""
+        """Initialize content cache manager."""
         self.cache_manager = None
         if self.rym_config.cache_enabled:
-            self.cache_manager = HtmlCacheManager(
-                self.rym_config.cache_dir,
-                self.rym_config.cache_expiry_days
+            self.cache_manager = ContentCacheManager(
+                self.rym_config.cache_dir
             )
             # Note: HTML cache cleanup disabled - not currently used and interferes with genre hierarchy cache
 
