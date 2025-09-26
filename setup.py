@@ -15,11 +15,15 @@ setup(
         'beautifulsoup4>=4.11.0',
         'lxml>=4.9.0',
         'requests>=2.28.0',
+        'urllib3>=1.26.0',
 
         # Browser automation
         'camoufox[geoip]>=0.3.0',
         'camoufox-captcha>=0.1.0',
         'playwright>=1.40.0',
+
+        # Retry and resilience
+        'tenacity>=8.0.0',
 
         # Optional: beets for plugin functionality
         'beets>=1.6.0',

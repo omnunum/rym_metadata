@@ -13,6 +13,7 @@ from .session_manager import ProxySessionManager
 from .cache_manager import HtmlCacheManager
 from .browser import BrowserManager
 from .scraper import RYMScraper
+from .genre_manager import GenreHierarchyManager
 
 __all__ = [
     # Core API
@@ -26,4 +27,5 @@ __all__ = [
     'HtmlCacheManager',
     'BrowserManager',
     'RYMScraper',
+    'GenreHierarchyManager',
 ]
