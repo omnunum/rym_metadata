@@ -226,15 +226,10 @@ class RYMMetadataScraper:
         """
         try:
             # Get album metadata, with artist fallback
-            result = await self.scraper.get_album_genres_and_descriptors(artist, album, year, album_type)
-            if not result:
-                # Fall back to artist genres if album search fails
-                result = await self.scraper.get_artist_genres_and_descriptors(artist)
+            genres, descriptors = await self.scraper.get_album_genres_and_descriptors(artist, album, year, album_type)
 
-            if not result:
+            if not genres:
                 return None
-
-            genres, descriptors = result
 
             # Build URL for reference (try direct first)
             url = self.scraper.build_direct_url(artist, album, album_type)
