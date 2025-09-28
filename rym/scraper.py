@@ -475,11 +475,11 @@ class RYMScraper:
                 return genres, descriptors
             else:
                 self.logger.info(f"No genres found for {artist} - {album}")
-                return None
+                return None, None
 
         except Exception as e:
             self.logger.error(f"Error processing {artist} - {album}: {e}")
-            return None
+            return None, None
         finally:
             # Close page to prevent memory leaks during long sessions
             await page.close()
@@ -536,11 +536,11 @@ class RYMScraper:
                 return genres, descriptors
             else:
                 self.logger.info(f"No genres found for artist {artist}")
-                return None
+                return None, None
 
         except Exception as e:
             self.logger.error(f"Error processing artist {artist}: {e}")
-            return None
+            return None, None
         finally:
             # Close page to prevent memory leaks during long sessions
             await page.close()
