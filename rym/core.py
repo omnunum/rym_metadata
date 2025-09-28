@@ -17,23 +17,14 @@ from .scraper import RYMScraper
 from camoufox import AsyncCamoufox
 
 @dataclass
-class AlbumMetadata:
-    """Container for album metadata extracted from RYM."""
-    artist: str
-    album: str
-    genres: List[str]
-    descriptors: List[str]
-    url: Optional[str] = None
-    album_type: Optional[str] = "album"
-
-
-@dataclass
-class ArtistMetadata:
-    """Container for artist metadata extracted from RYM."""
+class RYMMetadata:
+    """Container for RYM metadata (artist or album)."""
     artist: str
     genres: List[str]
     descriptors: List[str]
     url: Optional[str] = None
+    album: Optional[str] = None  # None for artist-only metadata
+    album_type: Optional[str] = None  # "album", "single", "ep", "compilation"
 
 
 @dataclass
@@ -221,7 +212,7 @@ class RYMMetadataScraper:
         await self.scraper.__aexit__(exc_type, exc_val, exc_tb)
 
 
-    async def get_album_metadata(self, artist: str, album: str, year: Optional[int] = None, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> Optional[AlbumMetadata]:
+    async def get_album_metadata(self, artist: str, album: str, year: Optional[int] = None, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> Optional[RYMMetadata]:
         """Get metadata for a single album.
 
         Args:
@@ -231,7 +222,7 @@ class RYMMetadataScraper:
             album_type: Type of release ("album", "single", "ep", "compilation")
 
         Returns:
-            AlbumMetadata object or None if not found
+            RYMMetadata object or None if not found
         """
         try:
             # Get album metadata, with artist fallback
@@ -248,7 +239,7 @@ class RYMMetadataScraper:
             # Build URL for reference (try direct first)
             url = self.scraper.build_direct_url(artist, album, album_type)
 
-            return AlbumMetadata(
+            return RYMMetadata(
                 artist=artist,
                 album=album,
                 genres=genres,
@@ -261,14 +252,14 @@ class RYMMetadataScraper:
             self.logger.error(f"Error getting metadata for {artist} - {album}: {e}")
             return None
 
-    async def get_artist_metadata(self, artist: str) -> Optional[ArtistMetadata]:
+    async def get_artist_metadata(self, artist: str) -> Optional[RYMMetadata]:
         """Get metadata for a single artist.
 
         Args:
             artist: Artist name
 
         Returns:
-            ArtistMetadata object or None if not found
+            RYMMetadata object or None if not found
         """
         try:
             # Get artist metadata directly
@@ -282,11 +273,13 @@ class RYMMetadataScraper:
             # Build URL for reference (try direct first)
             url = self.scraper.build_artist_url(artist)
 
-            return ArtistMetadata(
+            return RYMMetadata(
                 artist=artist,
                 genres=genres,
                 descriptors=descriptors,
-                url=url
+                url=url,
+                album=None,
+                album_type=None
             )
 
         except Exception as e:

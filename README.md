@@ -25,7 +25,7 @@ The standalone API is designed to be imported into any Python application withou
 
 ```python
 import asyncio
-from rym import RYMMetadataScraper, RYMConfig, AlbumMetadata, ArtistMetadata
+from rym import RYMMetadataScraper, RYMConfig, RYMMetadata
 
 # Create configuration
 config = RYMConfig(
@@ -293,15 +293,13 @@ This will automatically add RYM genre information to newly imported albums.
 ## Data Fields
 
 ### Standalone Usage
-**AlbumMetadata:**
+**RYMMetadata:**
+- `metadata.artist`: Artist name
 - `metadata.genres`: List of genre strings
 - `metadata.descriptors`: List of descriptor strings
-- `metadata.url`: RYM album URL
-
-**ArtistMetadata:**
-- `metadata.genres`: List of genre strings
-- `metadata.descriptors`: List of descriptor strings
-- `metadata.url`: RYM artist URL
+- `metadata.url`: RYM page URL
+- `metadata.album`: Album name (None for artist-only metadata)
+- `metadata.album_type`: Album type ("album", "single", "ep", "compilation")
 
 ### Beets Plugin
 - `genres`: Semicolon-separated genres (written to files)

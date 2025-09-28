@@ -4,8 +4,7 @@
 from .core import (
     RYMMetadataScraper,
     RYMConfig,
-    AlbumMetadata,
-    ArtistMetadata,
+    RYMMetadata,
 )
 
 # Internal components (for advanced usage)
@@ -19,8 +18,7 @@ __all__ = [
     # Core API
     'RYMMetadataScraper',
     'RYMConfig',
-    'AlbumMetadata',
-    'ArtistMetadata',
+    'RYMMetadata',
 
     # Internal components (for advanced usage)
     'ProxySessionManager',
