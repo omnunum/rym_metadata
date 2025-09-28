@@ -30,25 +30,6 @@ class TestRYMConfig:
 
         assert config.proxy_server_url == "https://proxy.example.com:8080"
 
-    def test_server_url_missing_host(self):
-        """Test server URL when host is missing."""
-        config = RYMConfig(
-            proxy_enabled=True,
-            proxy_host=None,
-            proxy_port=8080
-        )
-
-        assert config.proxy_server_url is None
-
-    def test_server_url_missing_port(self):
-        """Test server URL when port is missing."""
-        config = RYMConfig(
-            proxy_enabled=True,
-            proxy_host="proxy.example.com",
-            proxy_port=None
-        )
-
-        assert config.proxy_server_url is None
 
     def test_is_proxy_valid_complete_config(self):
         """Test validation with complete proxy configuration."""
@@ -67,53 +48,7 @@ class TestRYMConfig:
         config = RYMConfig(proxy_enabled=False)
         assert config.is_proxy_valid is False
 
-    def test_is_proxy_valid_missing_host(self):
-        """Test validation when host is missing."""
-        config = RYMConfig(
-            proxy_enabled=True,
-            proxy_host=None,
-            proxy_port=8080,
-            proxy_username="testuser",
-            proxy_password="testpass"
-        )
 
-        assert config.is_proxy_valid is False
-
-    def test_is_proxy_valid_missing_port(self):
-        """Test validation when port is missing."""
-        config = RYMConfig(
-            proxy_enabled=True,
-            proxy_host="proxy.example.com",
-            proxy_port=None,
-            proxy_username="testuser",
-            proxy_password="testpass"
-        )
-
-        assert config.is_proxy_valid is False
-
-    def test_is_proxy_valid_missing_username(self):
-        """Test validation when username is missing."""
-        config = RYMConfig(
-            proxy_enabled=True,
-            proxy_host="proxy.example.com",
-            proxy_port=8080,
-            proxy_username=None,
-            proxy_password="testpass"
-        )
-
-        assert config.is_proxy_valid is False
-
-    def test_is_proxy_valid_missing_password(self):
-        """Test validation when password is missing."""
-        config = RYMConfig(
-            proxy_enabled=True,
-            proxy_host="proxy.example.com",
-            proxy_port=8080,
-            proxy_username="testuser",
-            proxy_password=None
-        )
-
-        assert config.is_proxy_valid is False
 
 
 

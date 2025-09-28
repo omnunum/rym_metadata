@@ -1,6 +1,7 @@
 """Core scraping functionality for RYM metadata extraction."""
 
 import asyncio
+import json
 import logging
 import random
 import re
@@ -17,6 +18,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from .content_cache_manager import ContentCacheManager
 from .session_manager import ProxySessionManager
 from .browser import BrowserManager
+from .text_utils import normalize_text
 from .genre_manager import GenreHierarchyManager
 
 BASE_URL = "https://rateyourmusic.com"
@@ -105,8 +107,18 @@ class RYMScraper:
             if not await self._solve_cloudflare_challenge_once():
                 self.logger.error("Failed to solve Cloudflare challenge after 3 attempts - browser session may not work properly")
 
+        except (ConnectionError, TimeoutError) as e:
+            self.logger.error(f"Network error starting browser session: {e}")
+            self._browser = None
+            self._browser_context = None
+            raise
+        except ImportError as e:
+            self.logger.error(f"Missing browser dependencies: {e}")
+            self._browser = None
+            self._browser_context = None
+            raise
         except Exception as e:
-            self.logger.error(f"Failed to start browser session: {e}")
+            self.logger.error(f"Unexpected error starting browser session: {e}")
             self._browser = None
             self._browser_context = None
             raise
@@ -380,8 +392,9 @@ class RYMScraper:
                 self.session_manager.increment_request_count()
             return html
 
-    async def get_album_genres_and_descriptors(self, artist: str, album: str, year: Optional[int] = None, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> Optional[Dict[str, Any]]:
-        """Get genre and descriptor information for an album (beets-independent).
+
+    async def get_album_genres_and_descriptors(self, artist: str, album: str, year: Optional[int] = None, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> Optional[tuple[list[str], list[str]]]:
+        """Get genre and descriptor information for a specific album.
 
         Args:
             artist: Artist name
@@ -390,37 +403,35 @@ class RYMScraper:
             album_type: Type of album release
 
         Returns:
-            Dict with 'genres' and 'descriptors' lists, or None if not found
+            Tuple of (genres, descriptors) lists, or None if not found
         """
-        # Check content cache first
-        if self.cache_manager:
-            cached_html = self.cache_manager.get_cached_content("release", artist, album)
-            if cached_html:
-                genre_data = self._extract_genres_from_html(cached_html)
-                if genre_data.get('genres') or genre_data.get('descriptors'):
-                    return genre_data
-
         page = await self._create_page()
         try:
-            # Try direct URL first
+            self.logger.info(f"Searching for album: {artist} - {album}")
+
+            # Check release content cache first
+            if self.cache_manager:
+                cached_html = self.cache_manager.get_cached_content("release", artist, album)
+                if cached_html:
+                    genres, descriptors = self._extract_genres_from_html(cached_html)
+                    if genres or descriptors:
+                        return genres, descriptors
+
+            # Try direct album URL
             direct_url = self.build_direct_url(artist, album, album_type)
-            self.logger.info(f"Trying direct URL ({album_type}): {direct_url}")
+            self.logger.debug(f"Trying direct album URL: {direct_url}")
 
-            # Test if direct URL works
             html = await self._fetch_url(direct_url, page)
-            genre_data = self._extract_genres_from_html(html) if html else {'genres': [], 'descriptors': []}
-            genres = genre_data.get('genres', [])
-            descriptors = genre_data.get('descriptors', [])
+            genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
 
-            # Cache successful result
+            # Cache successful album result
             if html and (genres or descriptors) and self.cache_manager:
                 self.cache_manager.save_content("release", artist, html, album)
 
             # If direct URL fails, try artist ID cache + discography search
             if not genres:
-                self.logger.info(f"Direct URL failed, checking artist ID cache for {artist}")
+                self.logger.info(f"Direct album URL failed, checking artist ID cache for {artist}")
 
-                # Step 1: Check artist ID cache first
                 cached_artist_id = None
                 if self.cache_manager:
                     cached_artist_id = self.cache_manager.lookup_artist_id(artist)
@@ -431,11 +442,8 @@ class RYMScraper:
                     album_url = await self._search_discography_by_artist_id(cached_artist_id, album, page, year)
 
                     if album_url:
-                        # Fetch album page and extract genres
                         html = await self._fetch_url(album_url, page)
-                        genre_data = self._extract_genres_from_html(html) if html else {'genres': [], 'descriptors': []}
-                        genres = genre_data.get('genres', [])
-                        descriptors = genre_data.get('descriptors', [])
+                        genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
 
                         # Cache successful result
                         if html and (genres or descriptors) and self.cache_manager:
@@ -445,30 +453,25 @@ class RYMScraper:
                 if not genres:
                     self.logger.info(f"Artist ID cache miss or search failed, trying full artist page approach for {artist} - {album}")
 
-                    # Step 2: Get artist page URL
                     artist_page_url = await self._get_artist_page_url(artist, page)
 
                     if artist_page_url:
-                        # Step 3: Search artist's discography
                         album_url = await self._search_artist_discography(artist_page_url, album, page, year)
 
                         if album_url:
-                            # Fetch album page and extract genres
                             html = await self._fetch_url(album_url, page)
-                            genre_data = self._extract_genres_from_html(html) if html else {'genres': [], 'descriptors': []}
-                            genres = genre_data.get('genres', [])
-                            descriptors = genre_data.get('descriptors', [])
+                            genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
 
                             # Cache successful result
                             if html and (genres or descriptors) and self.cache_manager:
                                 self.cache_manager.save_content("release", artist, html, album)
 
-                # No more fallbacks - if discography search fails, we're done
-                if not genres:
-                    self.logger.info(f"Artist discography search failed for {artist} - {album}")
-                    return None
-
-            return {'genres': genres, 'descriptors': descriptors}
+            # Return results or None
+            if genres or descriptors:
+                return genres, descriptors
+            else:
+                self.logger.info(f"No genres found for {artist} - {album}")
+                return None
 
         except Exception as e:
             self.logger.error(f"Error processing {artist} - {album}: {e}")
@@ -477,62 +480,59 @@ class RYMScraper:
             # Close page to prevent memory leaks during long sessions
             await page.close()
 
-    async def get_artist_genres_and_descriptors(self, artist: str) -> Optional[Dict[str, Any]]:
-        """Get genre and descriptor information for an artist (beets-independent).
+    async def get_artist_genres_and_descriptors(self, artist: str) -> Optional[tuple[list[str], list[str]]]:
+        """Get genre and descriptor information for a specific artist.
 
         Args:
             artist: Artist name
 
         Returns:
-            Dict with 'genres' and 'descriptors' lists, or None if not found
+            Tuple of (genres, descriptors) lists, or None if not found
         """
-        # Check content cache first
-        if self.cache_manager:
-            cached_html = self.cache_manager.get_cached_content("artist", artist)
-            if cached_html:
-                genre_data = self._extract_artist_genres_from_html(cached_html)
-                if genre_data.get('genres') or genre_data.get('descriptors'):
-                    return genre_data
-
         page = await self._create_page()
         try:
-            # Try direct artist URL first
+            self.logger.info(f"Searching for artist: {artist}")
+
+            # Check artist content cache first
+            if self.cache_manager:
+                cached_html = self.cache_manager.get_cached_content("artist", artist)
+                if cached_html:
+                    genres, descriptors = self._extract_genres_from_html(cached_html, "artist")
+                    if genres or descriptors:
+                        return genres, descriptors
+
+            # Try direct artist URL
             direct_url = self.build_artist_url(artist)
-            self.logger.debug("Trying direct artist URL: %s", direct_url)
+            self.logger.debug(f"Trying direct artist URL: {direct_url}")
 
-            # Test if direct URL works
             html = await self._fetch_url(direct_url, page)
-            genre_data = self._extract_artist_genres_from_html(html) if html else {'genres': [], 'descriptors': []}
-            genres = genre_data.get('genres', [])
-            descriptors = genre_data.get('descriptors', [])
+            genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
 
-            # Cache successful result
+            # Cache successful artist result
             if html and (genres or descriptors) and self.cache_manager:
                 self.cache_manager.save_content("artist", artist, html)
 
-            # If direct URL fails, fall back to search
+            # If direct artist URL fails, try artist search
             if not genres:
-                self.logger.debug(f"Direct URL failed, searching for artist {artist}")
+                self.logger.debug(f"Direct artist URL failed, searching for artist {artist}")
                 search_url = self.build_artist_search_url(artist)
 
-                # Use search functionality for artists
                 artist_url = await self._search_artist_url(search_url, page, artist)
 
-                if not artist_url:
-                    self.logger.debug(f"No RYM page found for artist {artist}")
-                    return None
+                if artist_url:
+                    html = await self._fetch_url(artist_url, page)
+                    genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
 
-                # Fetch artist page and extract genres
-                html = await self._fetch_url(artist_url, page)
-                genre_data = self._extract_artist_genres_from_html(html) if html else {'genres': [], 'descriptors': []}
-                genres = genre_data.get('genres', [])
-                descriptors = genre_data.get('descriptors', [])
+                    # Cache successful result
+                    if html and (genres or descriptors) and self.cache_manager:
+                        self.cache_manager.save_content("artist", artist, html)
 
-                # Cache successful result
-                if html and (genres or descriptors) and self.cache_manager:
-                    self.cache_manager.save_content("artist", artist, html)
-
-            return {'genres': genres, 'descriptors': descriptors}
+            # Return results or None
+            if genres or descriptors:
+                return genres, descriptors
+            else:
+                self.logger.info(f"No genres found for artist {artist}")
+                return None
 
         except Exception as e:
             self.logger.error(f"Error processing artist {artist}: {e}")
@@ -540,6 +540,7 @@ class RYMScraper:
         finally:
             # Close page to prevent memory leaks during long sessions
             await page.close()
+
 
     async def process_single_album(self, album_obj: Any, dry_run: bool = False) -> Optional[tuple[Any, Dict[str, Any]]]:
         """Process a single album and extract genre information (beets-compatible wrapper).
@@ -552,14 +553,16 @@ class RYMScraper:
             album_name = getattr(album_obj, 'album', '')
             year = getattr(album_obj, 'year', None)
 
-            # Get genre data using the generic method (no page parameter needed)
-            genre_data = await self.get_album_genres_and_descriptors(artist, album_name, year)
+            # Get genre data for album, with artist fallback
+            result = await self.get_album_genres_and_descriptors(artist, album_name, year)
+            if not result:
+                # Fall back to artist genres if album search fails
+                result = await self.get_artist_genres_and_descriptors(artist)
 
-            if not genre_data:
+            if not result:
                 return None
 
-            genres = genre_data.get('genres', [])
-            descriptors = genre_data.get('descriptors', [])
+            genres, descriptors = result
 
             if (genres or descriptors) and not dry_run:
                 # Store genres and descriptors in the album (beets-specific)
@@ -570,7 +573,7 @@ class RYMScraper:
                 if hasattr(album_obj, 'store'):
                     album_obj.store()
 
-            return album_obj, genre_data
+            return album_obj, {'genres': genres, 'descriptors': descriptors}
 
         except Exception as e:
             artist = getattr(album_obj, 'albumartist', 'Unknown')
@@ -580,7 +583,6 @@ class RYMScraper:
 
     def build_direct_url(self, artist: str, album_name: str, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> str:
         """Build direct RYM URL for the given artist and album."""
-        from .content_cache_manager import ContentCacheManager
 
         # Map album types to RYM URL paths
         type_mapping = {
@@ -596,14 +598,14 @@ class RYMScraper:
             self.logger.warning(f"Unknown album_type '{album_type}', defaulting to 'album'")
 
         # Use normalize_text for URL building
-        artist_clean = ContentCacheManager.normalize_text(
+        artist_clean = normalize_text(
             artist,
             remove_accents=True,
             lowercase=True,
             remove_punctuation=True
         ).replace(' ', '-')
 
-        album_clean = ContentCacheManager.normalize_text(
+        album_clean = normalize_text(
             album_name,
             remove_accents=True,
             lowercase=True,
@@ -616,10 +618,9 @@ class RYMScraper:
 
     def build_artist_url(self, artist: str) -> str:
         """Build direct RYM artist URL for the given artist."""
-        from .content_cache_manager import ContentCacheManager
 
         # Use normalize_text for URL building
-        artist_clean = ContentCacheManager.normalize_text(
+        artist_clean = normalize_text(
             artist,
             remove_accents=True,
             lowercase=True,
@@ -979,141 +980,116 @@ class RYMScraper:
             self.logger.error(f"Error during discography search: {e}")
             return None
 
-    def _extract_genres_from_html(self, html: str) -> Dict[str, list[str]]:
-        """Extract genre information and descriptors from RYM album page HTML."""
+    def _parse_album_genres_and_descriptors(self, soup: BeautifulSoup) -> tuple[list[str], list[str]]:
+        """Extract genres and descriptors from album page HTML structure."""
+        genres = []
+        descriptors = []
+
+        # Fail fast: Check if this looks like a valid album page
+        genre_row = soup.find('tr', class_='release_genres')
+        if not genre_row:
+            # No release_genres row means this isn't a valid album page
+            return genres, descriptors
+
+        # Extract all genres from the release_genres row (both primary and secondary)
+        genre_links = genre_row.find_all('a', class_='genre')
+        for link in genre_links:
+            genre_text = link.get_text(strip=True)
+            if genre_text:
+                genres.append(genre_text)
+
+        # Look for descriptors in the release_descriptors row
+        descriptor_row = soup.find('tr', class_='release_descriptors')
+        if descriptor_row:
+            # Find all meta tags with content attribute
+            meta_tags = descriptor_row.find_all('meta', content=True)
+            for meta in meta_tags:
+                descriptor = meta.get('content', '').strip()
+                if descriptor:
+                    descriptors.append(descriptor)
+
+        return genres, descriptors
+
+    def _parse_artist_genres_and_descriptors(self, soup: BeautifulSoup) -> tuple[list[str], list[str]]:
+        """Extract genres and descriptors from artist page HTML structure."""
+        genres = []
+        descriptors = []
+
+        # Look for genres in artist_info_main class
+        # Find the "Genres" header and extract from the following info_content div
+        artist_info_main = soup.find(class_='artist_info_main')
+        if artist_info_main:
+            info_headers = artist_info_main.find_all('div', class_='info_hdr')
+            for header in info_headers:
+                if header.get_text(strip=True).lower() == 'genres':
+                    # Find the next info_content div after the Genres header
+                    info_content = header.find_next_sibling('div', class_='info_content')
+                    if info_content:
+                        genre_links = info_content.find_all('a', class_='genre')
+                        for link in genre_links:
+                            genre_text = link.get_text(strip=True)
+                            if not genre_text:
+                                continue
+                            genres.append(genre_text)
+                    break
+
+        return genres, descriptors
+
+    def _extract_genres_from_html(self, html: str, content_type: Literal["album", "artist"] = "album") -> tuple[list[str], list[str]]:
+        """Extract genre information and descriptors from RYM page HTML."""
         if not html:
-            return {'genres': [], 'descriptors': []}
+            return [], []
 
         try:
             soup = BeautifulSoup(html, 'html.parser')
 
-            # Fail fast: Check if this looks like a valid album page
-            genre_row = soup.find('tr', class_='release_genres')
-            if not genre_row:
-                # No release_genres row means this isn't a valid album page
-                return {'genres': [], 'descriptors': []}
-
-            genres = []
-            descriptors = []
-
-            # Extract all genres from the release_genres row (both primary and secondary)
-            genre_links = genre_row.find_all('a', class_='genre')
-            for link in genre_links:
-                genre_text = link.get_text(strip=True)
-                if genre_text:
-                    genres.append(genre_text)
-
-            # Look for descriptors in the release_descriptors row
-            descriptor_row = soup.find('tr', class_='release_descriptors')
-            if descriptor_row:
-                # Find all meta tags with content attribute
-                meta_tags = descriptor_row.find_all('meta', content=True)
-                for meta in meta_tags:
-                    descriptor = meta.get('content', '').strip()
-                    if descriptor:
-                        descriptors.append(descriptor)
-
-            # Expand genres with parent genres if enabled
-            final_genres = _deduplicate_list(genres)
-            if self.genre_manager and self.config.expand_parent_genres and final_genres:
-                try:
-                    # Ensure genre manager has loaded data
-                    if not self.genre_manager._loaded:
-                        self.logger.debug("Genre manager not loaded, attempting to load hierarchy data")
-                        if not self.genre_manager.load_hierarchy_data():
-                            self.logger.warning("Could not load genre hierarchy data, parent genre expansion disabled")
-                            return {
-                                'genres': final_genres,
-                                'descriptors': _deduplicate_list(descriptors)
-                            }
-
-                    expanded_genres = self.genre_manager.expand_genres_with_parents(final_genres)
-                    original_count = len(final_genres)
-                    final_genres = _deduplicate_list(expanded_genres)
-                    expanded_count = len(final_genres)
-
-                    if expanded_count > original_count:
-                        self.logger.debug(f"Expanded {original_count} original genres to {expanded_count} total genres (added {expanded_count - original_count} parent genres)")
-                    else:
-                        self.logger.debug(f"No parent genres added for {original_count} genres")
-
-                except Exception as e:
-                    self.logger.warning(f"Failed to expand parent genres: {e}")
-                    # Continue with original genres if expansion fails
-
-            return {
-                'genres': final_genres,
-                'descriptors': _deduplicate_list(descriptors)
-            }
-
+            # Use appropriate parser based on content type
+            if content_type == "album":
+                genres, descriptors = self._parse_album_genres_and_descriptors(soup)
+            elif content_type == "artist":
+                genres, descriptors = self._parse_artist_genres_and_descriptors(soup)
+            else:
+                self.logger.error(f"Unknown content_type: {content_type}")
+                return [], []
+        except (AttributeError, ValueError, TypeError) as e:
+            self.logger.error(f"HTML parsing error: {e}")
+            return [], []
         except Exception as e:
-            self.logger.error(f"Error extracting genres from HTML: {e}")
-            return {'genres': [], 'descriptors': []}
+            self.logger.error(f"Unexpected error extracting genres from HTML: {e}")
+            return [], []
 
-    def _extract_artist_genres_from_html(self, html: str) -> Dict[str, list[str]]:
-        """Extract genre information and descriptors from RYM artist page HTML."""
-        if not html:
-            return {'genres': [], 'descriptors': []}
+        # Expand genres with parent genres if enabled
+        final_genres = _deduplicate_list(genres)
+        if self.genre_manager and self.config.expand_parent_genres and final_genres:
+            try:
+                # Ensure genre manager has loaded data
+                if not self.genre_manager._loaded:
+                    self.logger.debug("Genre manager not loaded, attempting to load hierarchy data")
+                    if not self.genre_manager.load_hierarchy_data():
+                        self.logger.warning("Could not load genre hierarchy data, parent genre expansion disabled")
+                        return final_genres, _deduplicate_list(descriptors)
 
-        try:
-            soup = BeautifulSoup(html, 'html.parser')
-            genres = []
-            descriptors = []
+                expanded_genres = self.genre_manager.expand_genres_with_parents(final_genres)
+                original_count = len(final_genres)
+                final_genres = _deduplicate_list(expanded_genres)
+                expanded_count = len(final_genres)
 
-            # Look for genres in artist_info_main class
-            # Find the "Genres" header and extract from the following info_content div
-            artist_info_main = soup.find(class_='artist_info_main')
-            if artist_info_main:
-                info_headers = artist_info_main.find_all('div', class_='info_hdr')
-                for header in info_headers:
-                    if header.get_text(strip=True).lower() == 'genres':
-                        # Find the next info_content div after the Genres header
-                        info_content = header.find_next_sibling('div', class_='info_content')
-                        if info_content:
-                            genre_links = info_content.find_all('a', class_='genre')
-                            for link in genre_links:
-                                genre_text = link.get_text(strip=True)
-                                if not genre_text:
-                                    continue
-                                genres.append(genre_text)
-                        break
+                if expanded_count > original_count:
+                    self.logger.debug(f"Expanded {original_count} original genres to {expanded_count} total genres (added {expanded_count - original_count} parent genres)")
+                else:
+                    self.logger.debug(f"No parent genres added for {original_count} genres")
 
-            # Expand genres with parent genres if enabled
-            final_genres = _deduplicate_list(genres)
-            if self.genre_manager and self.config.expand_parent_genres and final_genres:
-                try:
-                    # Ensure genre manager has loaded data
-                    if not self.genre_manager._loaded:
-                        self.logger.debug("Genre manager not loaded, attempting to load hierarchy data for artist")
-                        if not self.genre_manager.load_hierarchy_data():
-                            self.logger.warning("Could not load genre hierarchy data, parent genre expansion disabled for artist")
-                            return {
-                                'genres': final_genres,
-                                'descriptors': _deduplicate_list(descriptors)
-                            }
+            except (FileNotFoundError, PermissionError, OSError) as e:
+                self.logger.warning(f"File system error during genre expansion: {e}")
+                # Continue with original genres if expansion fails
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                self.logger.warning(f"Content parsing error during genre expansion: {e}")
+                # Continue with original genres if expansion fails
+            except Exception as e:
+                self.logger.warning(f"Unexpected error during genre expansion: {e}")
+                # Continue with original genres if expansion fails
 
-                    expanded_genres = self.genre_manager.expand_genres_with_parents(final_genres)
-                    original_count = len(final_genres)
-                    final_genres = _deduplicate_list(expanded_genres)
-                    expanded_count = len(final_genres)
-
-                    if expanded_count > original_count:
-                        self.logger.debug(f"Expanded {original_count} original artist genres to {expanded_count} total genres (added {expanded_count - original_count} parent genres)")
-                    else:
-                        self.logger.debug(f"No parent genres added for artist {original_count} genres")
-
-                except Exception as e:
-                    self.logger.warning(f"Failed to expand parent genres for artist: {e}")
-                    # Continue with original genres if expansion fails
-
-            return {
-                'genres': final_genres,
-                'descriptors': _deduplicate_list(descriptors)
-            }
-
-        except Exception as e:
-            self.logger.error(f"Error extracting artist genres from HTML: {e}")
-            return {'genres': [], 'descriptors': []}
+        return final_genres, _deduplicate_list(descriptors)
 
 
 
@@ -1133,10 +1109,13 @@ class RYMScraper:
                 self.logger.debug("No artist links found in search results")
                 return None
 
-            # Look for exact match only (case insensitive)
+            # Look for exact match using normalized text comparison
+            normalized_artist = normalize_text(artist, remove_accents=True, lowercase=True)
+
             for link in artist_links:
                 link_text = link.get_text(strip=True)
-                if link_text.lower().strip() == artist.lower().strip():
+                normalized_link_text = normalize_text(link_text, remove_accents=True, lowercase=True)
+                if normalized_link_text == normalized_artist:
                     self.logger.info(f"Found exact artist match: '{link_text}' matches '{artist}'")
                     relative_url = link['href']
                     return f"{BASE_URL}{relative_url}"

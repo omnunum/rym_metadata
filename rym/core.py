@@ -6,7 +6,7 @@ that can be used standalone or integrated into other tools like streamrip.
 
 import logging
 import os
-from typing import Dict, List, Optional, Tuple, Any, Literal
+from typing import Dict, List, Optional, Any, Literal
 from dataclasses import dataclass
 
 from .session_manager import ProxySessionManager
@@ -234,14 +234,16 @@ class RYMMetadataScraper:
             AlbumMetadata object or None if not found
         """
         try:
-            # Use the refactored method (no page parameter needed)
-            genre_data = await self.scraper.get_album_genres_and_descriptors(artist, album, year, album_type)
+            # Get album metadata, with artist fallback
+            result = await self.scraper.get_album_genres_and_descriptors(artist, album, year, album_type)
+            if not result:
+                # Fall back to artist genres if album search fails
+                result = await self.scraper.get_artist_genres_and_descriptors(artist)
 
-            if not genre_data:
+            if not result:
                 return None
 
-            genres = genre_data.get('genres', [])
-            descriptors = genre_data.get('descriptors', [])
+            genres, descriptors = result
 
             # Build URL for reference (try direct first)
             url = self.scraper.build_direct_url(artist, album, album_type)
@@ -269,14 +271,13 @@ class RYMMetadataScraper:
             ArtistMetadata object or None if not found
         """
         try:
-            # Use the refactored method (no page parameter needed)
-            genre_data = await self.scraper.get_artist_genres_and_descriptors(artist)
+            # Get artist metadata directly
+            result = await self.scraper.get_artist_genres_and_descriptors(artist)
 
-            if not genre_data:
+            if not result:
                 return None
 
-            genres = genre_data.get('genres', [])
-            descriptors = genre_data.get('descriptors', [])
+            genres, descriptors = result
 
             # Build URL for reference (try direct first)
             url = self.scraper.build_artist_url(artist)
@@ -292,32 +293,6 @@ class RYMMetadataScraper:
             self.logger.error(f"Error getting metadata for artist {artist}: {e}")
             return None
 
-    async def get_multiple_albums_metadata(self, albums: List[Tuple[str, str, Optional[int], Optional[Literal["album", "single", "ep", "compilation"]]]]) -> List[Optional[AlbumMetadata]]:
-        """Get metadata for multiple albums.
-
-        Args:
-            albums: List of (artist, album, year, album_type) tuples (year and album_type can be None)
-
-        Returns:
-            List of AlbumMetadata objects (None for failed lookups)
-        """
-        results = []
-        for album_info in albums:
-            if len(album_info) == 2:
-                artist, album = album_info
-                year = None
-                album_type = "album"
-            elif len(album_info) == 3:
-                artist, album, year = album_info
-                album_type = "album"
-            else:
-                artist, album, year, album_type = album_info
-                if album_type is None:
-                    album_type = "album"
-
-            result = await self.get_album_metadata(artist, album, year, album_type)
-            results.append(result)
-        return results
 
     def clear_cache(self) -> int:
         """Clear HTML cache and return number of files cleared."""
