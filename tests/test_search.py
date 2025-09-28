@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, Mock
 from bs4 import BeautifulSoup
-from rym.scraper import RYMScraper
+from rym.scraper import RYMScraper, DiscographyCandidate
 
 
 
@@ -27,74 +27,62 @@ class TestRYMSearchEngine:
         """Create scraper instance with mock config."""
         return RYMScraper(mock_config, None, None, None)
 
-    def test_string_similarity_exact_match(self, scraper):
-        """Test string similarity with exact matches."""
-        score = scraper._calculate_match_score(
-            {'artist': 'Radiohead', 'album': 'OK Computer', 'year': 1997},
-            'Radiohead',
-            'OK Computer',
-            1997
+    def test_score_discography_candidate_case_insensitive(self, scraper):
+        """Test discography candidate scoring is case insensitive."""
+        candidate = DiscographyCandidate(
+            album="ok computer",
+            year=1997,
+            url="/release/album/radiohead/ok-computer/"
         )
+        score = scraper._score_discography_candidate(candidate, "OK COMPUTER", 1997)
         assert score == 1.0
 
-    def test_string_similarity_case_insensitive(self, scraper):
-        """Test string similarity is case insensitive."""
-        score = scraper._calculate_match_score(
-            {'artist': 'radiohead', 'album': 'ok computer', 'year': 1997},
-            'Radiohead',
-            'OK Computer',
-            1997
+    def test_score_discography_candidate_year_scoring(self, scraper):
+        """Test year scoring with different year differences."""
+        candidate = DiscographyCandidate(
+            album="Test Album",
+            year=2000,
+            url="/release/album/test/test-album/"
         )
+
+        # Exact year match
+        score = scraper._score_discography_candidate(candidate, "Test Album", 2000)
         assert score == 1.0
 
-    def test_year_scoring_exact(self, scraper):
-        """Test year scoring with exact match."""
-        score = scraper._calculate_match_score(
-            {'artist': 'Test', 'album': 'Test', 'year': 2000},
-            'Test',
-            'Test',
-            2000
+        # 1 year difference - should get 0.9 year score
+        score = scraper._score_discography_candidate(candidate, "Test Album", 2001)
+        expected = 1.0 * 0.8 + 0.9 * 0.2  # album_score * 0.8 + year_score * 0.2
+        assert score == expected
+
+        # Large year difference - should get 0.5 year score
+        score = scraper._score_discography_candidate(candidate, "Test Album", 2010)
+        expected = 1.0 * 0.8 + 0.5 * 0.2
+        assert score == expected
+
+    def test_score_discography_candidate_no_year(self, scraper):
+        """Test scoring when no year information is available."""
+        candidate = DiscographyCandidate(
+            album="Test Album",
+            year=None,
+            url="/release/album/test/test-album/"
         )
-        # Year component should be 1.0, overall score weighted accordingly
+        score = scraper._score_discography_candidate(candidate, "Test Album", 2000)
+        # Should use default year score of 1.0
         assert score == 1.0
 
-    def test_year_scoring_no_target_year(self, scraper):
-        """Test year scoring when no target year provided."""
-        score = scraper._calculate_match_score(
-            {'artist': 'Test', 'album': 'Test', 'year': 2000},
-            'Test',
-            'Test',
-            None
-        )
-        # Year component should be 1.0 (default)
-        assert score == 1.0
+    def test_score_discography_candidates_best_match(self, scraper):
+        """Test that best scoring candidate is selected."""
+        candidates = [
+            DiscographyCandidate("Different Album", 2000, "/release/different/"),
+            DiscographyCandidate("OK Computer", 1997, "/release/ok-computer/"),
+            DiscographyCandidate("Another Album", 1995, "/release/another/")
+        ]
 
-    def test_year_scoring_no_candidate_year(self, scraper):
-        """Test year scoring when candidate has no year."""
-        score = scraper._calculate_match_score(
-            {'artist': 'Test', 'album': 'Test', 'year': None},
-            'Test',
-            'Test',
-            2000
-        )
-        # Year component should be 1.0 (default)
-        assert score == 1.0
+        # Mock the config matching threshold
+        scraper.config.matching_threshold = 0.8
 
-    @pytest.mark.asyncio
-    async def test_search_album_url_success(self, scraper, sample_search_html):
-        """Test successful album URL search."""
-        scraper._fetch_url = AsyncMock(return_value=sample_search_html)
-        page_mock = Mock()
-
-        result = await scraper._search_album_url(
-            "http://example.com/search",
-            page_mock,
-            "Kollektiv Turmstrasse",
-            "Musik Gewinnt Freunde Collection",
-            2013
-        )
-
-        assert result == "https://rateyourmusic.com/release/album/kollektiv-turmstrasse/musik-gewinnt-freunde-collection/"
+        result = scraper._score_discography_candidates(candidates, "OK Computer", 1997)
+        assert result == "https://rateyourmusic.com/release/ok-computer/"
 
     @pytest.mark.asyncio
     async def test_search_artist_url_exact_match_found(self, scraper):
@@ -190,46 +178,6 @@ class TestRYMSearchEngine:
 
         assert result == "https://rateyourmusic.com/artist/sigur-ros"
 
-    @pytest.mark.asyncio
-    async def test_search_album_url_best_match_selection(self, scraper):
-        """Test that the best scoring match is selected."""
-        html = '''
-        <html>
-        <body>
-            <tr class="infobox">
-                <td>
-                    <table>
-                        <tr>
-                            <td><a class="artist" href="/artist/test">Different Artist</a></td>
-                            <td><a class="searchpage" href="/release/album/different/album/">Different Album</a></td>
-                            <td>2000</td>
-                        </tr>
-                    </table>
-                    <table>
-                        <tr>
-                            <td><a class="artist" href="/artist/radiohead">Radiohead</a></td>
-                            <td><a class="searchpage" href="/release/album/radiohead/ok-computer/">OK Computer</a></td>
-                            <td>1997</td>
-                        </tr>
-                    </table>
-                </td>
-            </tr>
-        </body>
-        </html>
-        '''
-        scraper._fetch_url = AsyncMock(return_value=html)
-        page_mock = Mock()
-
-        result = await scraper._search_album_url(
-            "http://example.com/search",
-            page_mock,
-            "Radiohead",
-            "OK Computer",
-            1997
-        )
-
-        # Should select the exact match (Radiohead - OK Computer)
-        assert result == "https://rateyourmusic.com/release/album/radiohead/ok-computer/"
 
 
 # Note: Some search-related tests have been removed because the referenced
