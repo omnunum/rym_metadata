@@ -448,10 +448,14 @@ class RYMScraper:
                         # Cache successful result
                         if html and (genres or descriptors) and self.cache_manager:
                             self.cache_manager.save_content("release", artist, html, album)
+                    else:
+                        # Artist exists (we have cached ID) but album not found in discography
+                        # No point in doing redundant artist search - fail fast
+                        self.logger.info(f"Artist {artist} found in cache but album {album} not in discography")
 
-                # If artist ID cache miss or discography search failed, try full artist page approach
-                if not genres:
-                    self.logger.info(f"Artist ID cache miss or search failed, trying full artist page approach for {artist} - {album}")
+                # Only try full artist page approach if we don't have cached artist ID
+                else:
+                    self.logger.info(f"No cached artist ID, trying full artist page approach for {artist} - {album}")
 
                     artist_page_url = await self._get_artist_page_url(artist, page)
 
