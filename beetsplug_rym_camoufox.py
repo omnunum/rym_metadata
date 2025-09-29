@@ -79,7 +79,7 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
         })
 
         # Create unified configuration
-        from rym.core import RYMConfig
+        from rym.dataclasses import RYMConfig
         self.rym_config = RYMConfig.from_beets_config(self.config)
 
         # Initialize components

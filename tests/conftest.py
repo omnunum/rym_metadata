@@ -4,7 +4,7 @@ import json
 import pytest
 from pathlib import Path
 from unittest.mock import Mock
-from rym.core import RYMConfig
+from rym.dataclasses import RYMConfig
 from rym.content_cache_manager import ContentCacheManager
 
 

@@ -7,14 +7,25 @@ import time
 from pathlib import Path
 from typing import Dict, Optional, Any
 
+from playwright.async_api import Page
+
+from tenacity import retry, stop_after_attempt, wait_exponential
 from camoufox_captcha import solve_captcha
 from .session_manager import ProxySessionManager
+from .dataclasses import RYMConfig
+
+
+class ServerOverloadError(Exception):
+    """Specific exception for 5xx server errors that may benefit from IP rotation."""
+    def __init__(self, status_code: int, message: str = None):
+        self.status_code = status_code
+        super().__init__(message or f"Server error {status_code}")
 
 
 class BrowserManager:
     """Manages browser configuration, Cloudflare challenges, and resource blocking."""
 
-    def __init__(self, config: Any, session_manager: Optional[ProxySessionManager] = None) -> None:
+    def __init__(self, config: RYMConfig, session_manager: Optional[ProxySessionManager] = None) -> None:
         self.config = config
         self.session_manager = session_manager
         self.logger = logging.getLogger(__name__)
@@ -30,11 +41,8 @@ class BrowserManager:
             'blocked_types': {}
         }
 
-    def get_browser_options(self, enable_resource_blocking: bool = False) -> Dict[str, Any]:
+    def get_browser_options(self) -> Dict[str, Any]:
         """Get Camoufox browser options with proxy configuration.
-
-        Args:
-            enable_resource_blocking: Enable resource blocking for bandwidth optimization
         """
         browser_proxy_config = None
 
@@ -149,14 +157,161 @@ class BrowserManager:
         blocked_domains_list = ', '.join(sorted(blocked_domains))
         self.logger.info(f"Set up targeted resource blocking. Blocking domains: {blocked_domains_list}")
 
+    def _handle_response_status(self, status_code: int) -> bool:
+        """Handle HTTP response status codes.
 
-    async def solve_cloudflare_challenge(self, page: Any, url: str) -> bool:
+        Returns:
+            True: 200-299, success
+            False: 400-499, client error - don't retry
+            Raises ServerOverloadError: 500-599, server error - retry via @retry decorator
+        """
+        if 200 <= status_code < 300:
+            return True
+        elif 400 <= status_code < 500:
+            return False
+        elif 500 <= status_code < 600:
+            raise ServerOverloadError(status_code, f"Server error {status_code} - retrying")
+        else:
+            # Unexpected status codes (1xx, 3xx) - treat as success for now
+            return True
+
+    async def _handle_server_overload_rotation(self, page: Page) -> bool:
+        """Handle server overload with IP rotation and cookie clearing.
+
+        Returns:
+            True if rotated successfully and should continue retry
+            False if no more ports available (stop retrying)
+        """
+        if not self.session_manager:
+            self.logger.warning("Server overload detected but no session manager available")
+            return False
+
+        if not self.config.auto_rotate_on_failure:
+            self.logger.warning("Server overload detected but auto_rotate_on_failure is disabled")
+            return False
+
+        self.logger.warning("Server overload detected, rotating IP")
+        self.session_manager.mark_port_blocked()
+
+        if self.session_manager.rotate_port():
+            self.logger.info("Rotated to new port, clearing cookies")
+            browser_context = page.context
+            await browser_context.clear_cookies()
+
+            self.logger.info("IP rotated successfully, challenges will be handled automatically on next request")
+            return True
+        else:
+            self.logger.error("No more ports available")
+            return False
+
+    @retry(stop=stop_after_attempt(lambda self: self.config.max_retries), wait=wait_exponential(multiplier=2, min=2, max=30))
+    async def navigate_with_protection(self, page: Page, url: str, response_type: str = 'html', **goto_kwargs) -> Optional[Any]:
+        """Universal navigation with automatic Cloudflare challenge handling and unified request handling.
+
+        Args:
+            page: Playwright page instance (caller manages lifecycle)
+            url: Target URL to navigate to
+            response_type: 'html' for HTML navigation or 'json' for JSON API requests
+            **goto_kwargs: Arguments passed to page.goto() (wait_until, timeout, etc.)
+
+        Returns:
+            For HTML: HTML string content or None if failed
+            For JSON: Parsed JSON object or None if failed
+        """
+        try:
+            # 1. Make the request (branch by request type)
+            if response_type == 'json':
+                self.logger.debug(f"Making JSON request to {url}")
+                response = await page.request.get(url)
+            else:
+                self.logger.debug(f"Navigating to {url}")
+                response = await page.goto(url, **goto_kwargs)
+
+            # 2. Unified challenge detection and handling
+            if await self.is_cloudflare_challenge(page):
+                self.logger.info("Cloudflare challenge detected")
+
+                # Solve challenge or raise to let @retry handle it
+                if not await self.solve_cloudflare_challenge(page, url):
+                    raise Exception("Cloudflare challenge solving failed")
+
+                # Retry the request after solving challenge
+                self.logger.info("Challenge solved, retrying request")
+                if response_type == 'json':
+                    response = await page.request.get(url)
+                else:
+                    response = await page.goto(url, **goto_kwargs)
+
+                # If still getting challenge, raise to retry
+                if await self.is_cloudflare_challenge(page):
+                    raise Exception("Still getting Cloudflare challenge after solving")
+
+            # 3. Unified status checking
+            if response and hasattr(response, 'status'):
+                if not self._handle_response_status(response.status):
+                    self.logger.warning(f"Request failed with status {response.status}")
+                    return None
+
+            # 4. Return appropriate content (branch by response type)
+            if response_type == 'json':
+                json_data = await response.json()
+                self.logger.debug(f"Successfully parsed JSON response")
+                return json_data
+            else:
+                html_content = await page.content()
+                # Update session manager if we have one
+                if self.session_manager:
+                    self.session_manager.increment_request_count()
+                return html_content
+
+        except ServerOverloadError as e:
+            # Handle IP rotation for server overload errors before re-raising
+            if await self._handle_server_overload_rotation(page):
+                self.logger.info("IP rotated, retrying...")
+                # Re-raise to let @retry handle the retry
+                raise
+            else:
+                self.logger.error("No more IPs available, giving up")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error during protected navigation to {url}: {e}")
+            # Re-raise to let @retry handle it
+            raise
+
+    async def is_cloudflare_challenge(self, page: Page) -> bool:
+        """Detect if current page is showing a Cloudflare challenge."""
+        try:
+            page_content = await page.content()
+            challenge_indicators = ['cloudflare', 'just a moment', 'checking your browser', 'ray id']
+
+            content_lower = page_content.lower()
+            for indicator in challenge_indicators:
+                if indicator in content_lower:
+                    self.logger.debug(f"Detected Cloudflare challenge indicator: '{indicator}'")
+                    return True
+
+            self.logger.debug("No Cloudflare challenge indicators found in page content")
+            return False
+
+        except Exception as e:
+            self.logger.warning(f"Error detecting challenge: {e}")
+            return True  # Assume challenge present if we can't detect
+
+    async def solve_cloudflare_challenge(self, page: Page, url: str) -> bool:
         """Solve Cloudflare challenge using camoufox-captcha library."""
         try:
             self.logger.info(f"Attempting to solve Cloudflare challenge for {url}...")
 
             # Use camoufox-captcha to automatically solve the challenge
-            success = await solve_captcha(page, captcha_type='cloudflare', challenge_type='interstitial')
+            # Use max_retries from config for solve_attempts
+            success = await solve_captcha(
+                page,
+                captcha_type='cloudflare',
+                challenge_type='interstitial',
+                solve_attempts=self.config.max_retries,
+                solve_click_delay=self.config.retry_delay
+            )
 
             if success:
                 self.logger.info("Successfully solved Cloudflare challenge!")
@@ -176,7 +331,7 @@ class BrowserManager:
             self.logger.error(f"Error solving Cloudflare challenge: {e}")
             return False
 
-    async def _extract_cookies(self, page: Any) -> Dict[str, str]:
+    async def _extract_cookies(self, page: Page) -> Dict[str, str]:
         """Extract cookies from async browser page."""
         try:
             cookies = {}
@@ -187,12 +342,9 @@ class BrowserManager:
             # Log all cookies first for debugging
             self.logger.debug(f"All available cookies: {list(cookies.keys())}")
 
-            # Filter for Cloudflare-specific cookies
-            cf_cookies = {k: v for k, v in cookies.items()
-                         if k.startswith(('cf_', '__cf', '_cf', '__cfduid', 'sec_'))}
 
-            self.logger.debug(f"Extracted {len(cf_cookies)} Cloudflare cookies: {list(cf_cookies.keys())}")
-            return cf_cookies
+            self.logger.debug(f"Extracted {len(cookies)} Cloudflare cookies: {list(cookies.keys())}")
+            return cookies
         except Exception as e:
             self.logger.error(f"Error extracting cookies: {e}")
             return {}
@@ -223,8 +375,7 @@ class BrowserManager:
 
             # Verify cookies were applied by reading them back
             context_cookies = await browser_context.cookies()
-            cf_context_cookies = [c for c in context_cookies if c['name'].startswith(('cf_', '__cf', '_cf', '__cfduid'))]
-            self.logger.debug(f"Browser context now has {len(cf_context_cookies)} Cloudflare cookies")
+            self.logger.debug(f"Browser context now has {len(context_cookies)} cookies")
 
         except Exception as e:
             self.logger.error(f"Error applying cookies to browser context: {e}")

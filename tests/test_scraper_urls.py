@@ -22,7 +22,6 @@ class TestRYMScraperURLs:
         return RYMScraper(
             config=MockConfig(),
             cache_manager=None,
-            session_manager=None,
             browser_manager=None
         )
 

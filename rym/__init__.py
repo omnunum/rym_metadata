@@ -1,10 +1,9 @@
 """RYM metadata scraping modules."""
 
 # Core standalone functionality (for streamrip and other integrations)
+from .dataclasses import RYMConfig, RYMMetadata
 from .core import (
     RYMMetadataScraper,
-    RYMConfig,
-    RYMMetadata,
 )
 
 # Internal components (for advanced usage)
@@ -17,7 +16,7 @@ from .genre_manager import GenreHierarchyManager
 __all__ = [
     # Core API
     'RYMMetadataScraper',
-    'RYMConfig',
+    'dataclasses',
     'RYMMetadata',
 
     # Internal components (for advanced usage)

@@ -4,7 +4,6 @@ import pytest
 from unittest.mock import AsyncMock, Mock, patch
 from rym.scraper import RYMScraper
 from rym.content_cache_manager import ContentCacheManager
-from rym.session_manager import ProxySessionManager
 from rym.browser import BrowserManager
 
 
@@ -14,7 +13,7 @@ class TestRYMScraper:
     @pytest.fixture
     def mock_config(self):
         """Create mock config for scraper."""
-        from rym.core import RYMConfig
+        from rym.dataclasses import RYMConfig
         return RYMConfig(
             max_retries=3,
             retry_delay=1,
@@ -31,7 +30,6 @@ class TestRYMScraper:
         return RYMScraper(
             config=mock_config,
             cache_manager=None,
-            session_manager=None,
             browser_manager=None
         )
 
@@ -42,7 +40,6 @@ class TestRYMScraper:
         return RYMScraper(
             config=mock_config,
             cache_manager=cache_manager,
-            session_manager=None,
             browser_manager=None
         )
 

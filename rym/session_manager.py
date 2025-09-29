@@ -5,54 +5,17 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, asdict, field
 
-
-@dataclass
-class SessionState:
-    """Session state for proxy management and cookies."""
-    current_port: int
-    port_range_min: int
-    port_range_max: int
-    cookies: Dict[str, str] = field(default_factory=dict)
-    session_start_time: Optional[str] = None
-    request_count: int = 0
-    blocked_ports: List[int] = field(default_factory=list)
-    last_success_time: Optional[str] = None
-    challenge_solved: bool = False
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'SessionState':
-        """Create SessionState from dictionary (for loading from JSON)."""
-        # Handle legacy port_range format
-        if 'port_range' in data and isinstance(data['port_range'], dict):
-            port_range = data['port_range']
-            data['port_range_min'] = port_range.get('min', data.get('current_port', 10001))
-            data['port_range_max'] = port_range.get('max', data.get('current_port', 10100))
-            del data['port_range']
-
-        # Only include fields that exist in the dataclass
-        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
-
-        return cls(**filtered_data)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert SessionState to dictionary (for saving to JSON)."""
-        data = asdict(self)
-        # Keep legacy port_range format for backward compatibility
-        data['port_range'] = {'min': self.port_range_min, 'max': self.port_range_max}
-        return data
-
+from rym.dataclasses import SessionState, RYMConfig
 
 
 class ProxySessionManager:
     """Manages proxy sessions, cookies, and port rotation for efficient scraping."""
 
-    def __init__(self, config: Any, state_file: Optional[str] = None) -> None:
+    def __init__(self, config: RYMConfig, state_file_path: Optional[str] = None) -> None:
         self.config = config
         # Save state file in current working directory
-        self.state_file = Path(state_file or '.rym_session_state.json')
+        self.state_file = Path(state_file_path or '.rym_session_state.json')
         self.logger = logging.getLogger(__name__)
 
         # Load existing state or initialize new state

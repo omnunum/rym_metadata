@@ -6,7 +6,6 @@ import logging
 import random
 import re
 import time
-from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Optional, Dict, Any, List, Literal
 from urllib.parse import quote
@@ -15,21 +14,15 @@ from bs4 import BeautifulSoup
 from camoufox import AsyncCamoufox
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from rym.dataclasses import DiscographyCandidate
+
 from .content_cache_manager import ContentCacheManager
-from .session_manager import ProxySessionManager
 from .browser import BrowserManager
 from .text_utils import normalize_text
 from .genre_manager import GenreHierarchyManager
 
 BASE_URL = "https://rateyourmusic.com"
 
-
-@dataclass
-class DiscographyCandidate:
-    """Container for discography search candidate."""
-    album: str
-    year: Optional[int]
-    url: str
 
 def _deduplicate_list(items: List[str]) -> List[str]:
     """Remove duplicates while preserving order."""
@@ -48,11 +41,9 @@ class RYMScraper:
     """Handles core scraping operations for RYM album data."""
 
     def __init__(self, config: Any, cache_manager: Optional[ContentCacheManager] = None,
-                 session_manager: Optional[ProxySessionManager] = None,
                  browser_manager: Optional[BrowserManager] = None) -> None:
         self.config = config
         self.cache_manager = cache_manager
-        self.session_manager = session_manager
         self.browser_manager = browser_manager
         self.logger = logging.getLogger(__name__)
 
@@ -62,7 +53,6 @@ class RYMScraper:
         # Browser state management - only browser context, pages created as needed
         self._browser = None
         self._browser_context = None
-        self._cf_challenge_solved = False
 
         # Genre hierarchy management - initialize if cache is available
         # This allows us to load existing genre data and scrape new data when needed
@@ -103,9 +93,7 @@ class RYMScraper:
             self._browser_context = await self._browser.new_context()
             self.logger.debug("Browser session and context started successfully")
 
-            # Solve Cloudflare challenge once at startup (with automatic retries)
-            if not await self._solve_cloudflare_challenge_once():
-                self.logger.error("Failed to solve Cloudflare challenge after 3 attempts - browser session may not work properly")
+            # Session cookie management is now handled by browser manager
 
         except (ConnectionError, TimeoutError) as e:
             self.logger.error(f"Network error starting browser session: {e}")
@@ -123,77 +111,6 @@ class RYMScraper:
             self._browser_context = None
             raise
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=5, min=5, max=15))
-    async def _solve_cloudflare_challenge_once(self) -> bool:
-        """Solve Cloudflare challenge and store session state. Returns True on success."""
-        if self._cf_challenge_solved:
-            return True  # Already solved
-
-        # Get browser context for all cookie operations
-        browser_context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
-
-        # Apply any existing session cookies to the browser context first
-        if self.session_manager and self.session_manager.is_session_valid():
-            await self.browser_manager.apply_session_cookies_to_context(browser_context)
-            self.logger.debug("Applied existing session cookies to browser context")
-
-        # Create a temporary page to solve the challenge
-        test_page = await browser_context.new_page()
-        try:
-            # Set up basic resource blocking
-            await self.browser_manager.setup_resource_blocking(test_page)
-
-            # Try a simple RYM page to check if cookies are valid
-            await test_page.goto(BASE_URL, wait_until='domcontentloaded')
-
-            # Check if a Cloudflare challenge is actually present
-            challenge_present = await self._detect_cloudflare_challenge(test_page)
-
-            if challenge_present:
-                self.logger.info("Cloudflare challenge detected, attempting to solve...")
-                challenge_solved = await self.browser_manager.solve_cloudflare_challenge(test_page, BASE_URL)
-                if not challenge_solved:
-                    self.logger.warning("Cloudflare challenge solving failed")
-                    raise Exception("Challenge solving failed, retrying...")
-                self.logger.info("Cloudflare challenge solved successfully")
-            else:
-                self.logger.info("No Cloudflare challenge detected, cookies are still valid")
-            self._cf_challenge_solved = True
-
-            # Extract and save cookies for future use
-            if self.session_manager:
-                cookies = await self.browser_manager._extract_cookies(test_page)
-                if cookies:
-                    self.session_manager.set_cookies(cookies)
-                    self.logger.debug("Saved Cloudflare session cookies")
-
-                    # Apply fresh cookies to browser context (they should already be there, but ensure consistency)
-                    await self.browser_manager.apply_session_cookies_to_context(browser_context)
-                    self.logger.info("Ensured Cloudflare session cookies are applied to browser context")
-
-            return True
-
-        finally:
-            await test_page.close()
-
-    async def _detect_cloudflare_challenge(self, page: Any) -> bool:
-        """Detect if current page is showing a Cloudflare challenge."""
-        try:
-            page_content = await page.content()
-            challenge_indicators = ['cloudflare', 'just a moment', 'checking your browser', 'ray id']
-
-            content_lower = page_content.lower()
-            for indicator in challenge_indicators:
-                if indicator in content_lower:
-                    self.logger.debug(f"Detected Cloudflare challenge indicator: '{indicator}'")
-                    return True
-
-            self.logger.debug("No Cloudflare challenge indicators found in page content")
-            return False
-
-        except Exception as e:
-            self.logger.warning(f"Error detecting challenge: {e}")
-            return True  # Assume challenge present if we can't detect
 
     async def _ensure_genre_hierarchy_available(self) -> None:
         """Ensure genre hierarchy data is available, loading from cache or scraping if needed."""
@@ -234,44 +151,7 @@ class RYMScraper:
                 self.logger.warning(f"Error during browser cleanup: {e}")
             finally:
                 self._browser = None
-                self._cf_challenge_solved = False
 
-    async def _handle_server_overload_rotation(self, response: Any, page: Any) -> bool:
-        """Handle 503/522 status with IP rotation and cookie clearing.
-
-        Returns:
-            True if rotated successfully and should continue retry
-            False if no more ports available (stop retrying)
-            None if rotation not enabled (fall through to normal retry)
-        """
-        if response.status not in [503, 522]:
-            return None
-
-        error_type = "server overload" if response.status == 503 else "connection timeout"
-
-        if not (self.session_manager and self.config.auto_rotate_on_failure):
-            self.logger.warning(f"{response.status} {error_type} detected but auto_rotate_on_failure is disabled")
-            return None
-
-        self.logger.warning(f"{response.status} {error_type} detected, rotating IP")
-        self.session_manager.mark_port_blocked()
-
-        if self.session_manager.rotate_port():
-            self.logger.info("Rotated to new port, clearing cookies and re-solving challenge")
-            browser_context = page.context
-            await browser_context.clear_cookies()
-            self._cf_challenge_solved = False
-
-            # Immediately re-solve the challenge with the new IP
-            if await self._solve_cloudflare_challenge_once():
-                self.logger.info("Successfully re-solved Cloudflare challenge after IP rotation")
-                return True
-            else:
-                self.logger.error("Failed to re-solve Cloudflare challenge after IP rotation")
-                return False
-        else:
-            self.logger.error("No more ports available")
-            return False
 
     async def _create_page(self) -> Any:
         """Create a new page with resource blocking set up.
@@ -294,103 +174,30 @@ class RYMScraper:
 
         return page
 
-    async def _navigate_to_url(self, url: str, page: Any) -> bool:
-        """Navigate page to URL (needed for JavaScript interaction)."""
-        try:
-            # Apply rate limiting before making request
-            await self._wait_for_rate_limit()
 
-            # Navigate to URL
-            await page.goto(url, wait_until='domcontentloaded')
-
-            # Wait for network to be idle
-            try:
-                await page.wait_for_load_state('networkidle', timeout=10000)
-            except Exception:
-                # Fallback if networkidle fails
-                await asyncio.sleep(2)
-
-            # Update request time for rate limiting
-            self._update_request_time()
-
-            # Increment request count for successful request
-            if self.session_manager:
-                self.session_manager.increment_request_count()
-
-            return True
-
-        except Exception as e:
-            error_msg = str(e)
-            self.logger.debug(f"Failed to navigate to {url}: {error_msg}")
-            return False
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
-    async def _fetch_url(self, url: str, page: Any, response_type: str = 'html') -> Optional[Any]:
-        """Fetch URL with automatic retries. Returns HTML string or parsed JSON.
+    async def navigate_page_with_rate_limiting(self, url: str, page: Any, response_type: str = 'html') -> Optional[Any]:
+        """Navigate with scraper-specific rate limiting.
 
         Args:
-            url: URL to fetch
+            url: URL to navigate to
             page: Playwright page object
             response_type: 'html' for HTML content (default), 'json' for JSON API responses
 
         Returns:
             HTML string for response_type='html', parsed JSON for response_type='json'
         """
-        self.logger.debug(f"Fetching URL: {url} (type: {response_type})")
-
-        # Apply rate limiting before making request
+        # Rate limiting (scraper timing behavior)
         await self._wait_for_rate_limit()
 
-        if response_type == 'json':
-            # For JSON API requests, use the page context's request API
-            response = await page.request.get(url)
+        # Delegate everything to browser
+        result = await self.browser_manager.navigate_with_protection(
+            page, url, response_type=response_type, wait_until='domcontentloaded'
+        )
 
-            # Check if this is a 503/522 that needs IP rotation (before checking status)
-            rotation_result = await self._handle_server_overload_rotation(response, page)
-            if rotation_result is True:
-                # IP rotated and cookies cleared, let @retry handle the retry
-                raise Exception(f"Server overload {response.status}, IP rotated - retrying")
-            elif rotation_result is False:
-                # No more ports available
-                raise Exception(f"Server overload {response.status}, no more ports available")
+        # Update scraper timing for rate limiting
+        self._update_request_time()
 
-            if response.status == 200:
-                json_data = await response.json()
-                # Update request time for rate limiting
-                self._update_request_time()
-                # Increment request count for successful request
-                if self.session_manager:
-                    self.session_manager.increment_request_count()
-                return json_data
-            else:
-                # Other status codes - let @retry handle it
-                raise Exception(f"JSON request failed with status {response.status}")
-
-        else:
-            # HTML fetching logic
-            await page.goto(url, wait_until='domcontentloaded')
-
-            # Wait for network to be idle
-            try:
-                await page.wait_for_load_state('networkidle', timeout=10000)
-            except Exception:
-                # Fallback if networkidle fails
-                await asyncio.sleep(2)
-
-            # Get page source
-            html = await page.content()
-
-            # Basic validation
-            if not html or len(html) < 1000:
-                raise Exception(f"Got minimal content: {len(html) if html else 0} chars")
-
-            # Update request time for rate limiting
-            self._update_request_time()
-
-            # Increment request count for successful request
-            if self.session_manager:
-                self.session_manager.increment_request_count()
-            return html
+        return result
 
 
     async def get_album_genres_and_descriptors(self, artist: str, album: str, year: Optional[int] = None, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> Optional[tuple[list[str], list[str]]]:
@@ -421,7 +228,7 @@ class RYMScraper:
             direct_url = self.build_direct_url(artist, album, album_type)
             self.logger.debug(f"Trying direct album URL: {direct_url}")
 
-            html = await self._fetch_url(direct_url, page)
+            html = await self.navigate_page_with_rate_limiting(direct_url, page)
             genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
 
             # Cache successful album result
@@ -442,7 +249,7 @@ class RYMScraper:
                     album_url = await self._search_discography_by_artist_id(cached_artist_id, album, page, year)
 
                     if album_url:
-                        html = await self._fetch_url(album_url, page)
+                        html = await self.navigate_page_with_rate_limiting(album_url, page)
                         genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
 
                         # Cache successful result
@@ -463,7 +270,7 @@ class RYMScraper:
                         album_url = await self._search_artist_discography(artist_page_url, album, page, year)
 
                         if album_url:
-                            html = await self._fetch_url(album_url, page)
+                            html = await self.navigate_page_with_rate_limiting(album_url, page)
                             genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
 
                             # Cache successful result
@@ -509,7 +316,7 @@ class RYMScraper:
             direct_url = self.build_artist_url(artist)
             self.logger.debug(f"Trying direct artist URL: {direct_url}")
 
-            html = await self._fetch_url(direct_url, page)
+            html = await self.navigate_page_with_rate_limiting(direct_url, page)
             genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
 
             # Cache successful artist result
@@ -524,7 +331,7 @@ class RYMScraper:
                 artist_url = await self._search_artist_url(search_url, page, artist)
 
                 if artist_url:
-                    html = await self._fetch_url(artist_url, page)
+                    html = await self.navigate_page_with_rate_limiting(artist_url, page)
                     genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
 
                     # Cache successful result
@@ -668,7 +475,7 @@ class RYMScraper:
         self.logger.info(f"Trying direct artist URL: {direct_artist_url}")
 
         # Test if direct artist URL works
-        html = await self._fetch_url(direct_artist_url, page)
+        html = await self.navigate_page_with_rate_limiting(direct_artist_url, page)
         if html and len(html) > 1000:  # Basic validation for substantial content
             # Quick check if this looks like an artist page (not a 404)
             soup = BeautifulSoup(html, 'html.parser')
@@ -693,7 +500,7 @@ class RYMScraper:
 
             # Fetch and cache the artist page content
             if self.cache_manager:
-                artist_html = await self._fetch_url(found_url, page)
+                artist_html = await self.navigate_page_with_rate_limiting(found_url, page)
                 if artist_html:
                     self.cache_manager.save_content("artist", artist, artist_html)
 
@@ -949,7 +756,12 @@ class RYMScraper:
             if not artist_id:
                 # Navigate to the artist page to extract artist_id
                 await self._wait_for_rate_limit()
-                await page.goto(artist_page_url, wait_until='domcontentloaded')
+                success = await self.browser_manager.navigate_with_protection(
+                    page, artist_page_url, wait_until='domcontentloaded'
+                )
+                if not success:
+                    self.logger.warning("Could not navigate to artist page, discography search failed")
+                    return None
 
                 # Wait for network to be idle
                 try:
@@ -1099,7 +911,7 @@ class RYMScraper:
 
     async def _search_artist_url(self, search_url: str, page: Any, artist: str) -> Optional[str]:
         """Search for artist URL on RYM search page using fuzzy matching."""
-        html = await self._fetch_url(search_url, page)
+        html = await self.navigate_page_with_rate_limiting(search_url, page)
         if not html:
             return None
 
@@ -1199,8 +1011,8 @@ class RYMScraper:
         api_url = f"{BASE_URL}/api/1/genre/hierarchy/{genre_id}/"
 
         try:
-            # Use the robust _fetch_url method with JSON response type
-            json_data = await self._fetch_url(api_url, page, response_type='json')
+            # Use the robust navigate_page_with_rate_limiting method with JSON response type
+            json_data = await self.navigate_page_with_rate_limiting(api_url, page, response_type='json')
 
             if json_data is None:
                 self.logger.warning(f"Failed to fetch genre hierarchy data for {genre_id}")
@@ -1306,7 +1118,12 @@ class RYMScraper:
             await self._wait_for_rate_limit()
             url = f"{BASE_URL}/genres"
             self.logger.info(f"Fetching genre hierarchy from {url}")
-            await page.goto(url, wait_until='domcontentloaded')
+            success = await self.browser_manager.navigate_with_protection(
+                page, url, wait_until='domcontentloaded'
+            )
+            if not success:
+                self.logger.error("Failed to navigate to genres page")
+                return None
 
             html = await page.content()
             if not html or len(html) < 1000:

@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock
-from rym.core import RYMConfig
+from rym.dataclasses import RYMConfig
 
 
 class TestRYMConfig:

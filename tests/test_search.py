@@ -3,7 +3,8 @@
 import pytest
 from unittest.mock import AsyncMock, Mock
 from bs4 import BeautifulSoup
-from rym.scraper import RYMScraper, DiscographyCandidate
+from rym.dataclasses import DiscographyCandidate
+from rym.scraper import RYMScraper
 
 
 
@@ -15,7 +16,7 @@ class TestRYMSearchEngine:
     @pytest.fixture
     def mock_config(self):
         """Create mock config for scraper."""
-        from rym.core import RYMConfig
+        from rym.dataclasses import RYMConfig
         return RYMConfig(
             matching_threshold=0.8,
             max_retries=3,
@@ -25,7 +26,8 @@ class TestRYMSearchEngine:
     @pytest.fixture
     def scraper(self, mock_config):
         """Create scraper instance with mock config."""
-        return RYMScraper(mock_config, None, None, None)
+        mock_browser_manager = Mock()
+        return RYMScraper(mock_config, None, mock_browser_manager)
 
     def test_score_discography_candidate_case_insensitive(self, scraper):
         """Test discography candidate scoring is case insensitive."""
@@ -96,8 +98,8 @@ class TestRYMSearchEngine:
         </html>
         '''
 
-        # Mock the _fetch_url method
-        scraper._fetch_url = AsyncMock(return_value=html)
+        # Mock the navigate_page_with_rate_limiting method
+        scraper.navigate_page_with_rate_limiting = AsyncMock(return_value=html)
         page_mock = Mock()
 
         result = await scraper._search_artist_url(
@@ -120,8 +122,8 @@ class TestRYMSearchEngine:
         </html>
         '''
 
-        # Mock the _fetch_url method
-        scraper._fetch_url = AsyncMock(return_value=html)
+        # Mock the navigate_page_with_rate_limiting method
+        scraper.navigate_page_with_rate_limiting = AsyncMock(return_value=html)
         page_mock = Mock()
 
         result = await scraper._search_artist_url(
@@ -143,8 +145,8 @@ class TestRYMSearchEngine:
         </html>
         '''
 
-        # Mock the _fetch_url method
-        scraper._fetch_url = AsyncMock(return_value=html)
+        # Mock the navigate_page_with_rate_limiting method
+        scraper.navigate_page_with_rate_limiting = AsyncMock(return_value=html)
         page_mock = Mock()
 
         result = await scraper._search_artist_url(
@@ -166,8 +168,8 @@ class TestRYMSearchEngine:
         </html>
         '''
 
-        # Mock the _fetch_url method
-        scraper._fetch_url = AsyncMock(return_value=html)
+        # Mock the navigate_page_with_rate_limiting method
+        scraper.navigate_page_with_rate_limiting = AsyncMock(return_value=html)
         page_mock = Mock()
 
         result = await scraper._search_artist_url(

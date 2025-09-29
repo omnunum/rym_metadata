@@ -3,7 +3,8 @@
 import asyncio
 import logging
 import os
-from rym import RYMMetadataScraper, RYMConfig
+from rym import RYMMetadataScraper
+from rym.dataclasses import RYMConfig
 
 async def debug_album_async():
     """Test fetching genre info for a single album using the simplified API."""
@@ -26,12 +27,6 @@ async def debug_album_async():
     artist = "X Club."
     album = "Stay With Me"
     year = 2025
-
-    print(f"Testing: {artist} - {album}")
-    if config.proxy_host and config.proxy_port:
-        print(f"Using proxy: {config.proxy_host}:{config.proxy_port}")
-    else:
-        print("No proxy configured (env vars not set)")
 
     try:
         # Use the API with proxy-aware configuration
@@ -84,10 +79,6 @@ async def debug_artist_only():
 
     artist = "Kollektiv Turmstrasse"
     print(f"Testing artist-only: {artist}")
-    if config.proxy_host and config.proxy_port:
-        print(f"Using proxy: {config.proxy_host}:{config.proxy_port}")
-    else:
-        print("No proxy configured (env vars not set)")
 
     try:
         async with RYMMetadataScraper(config) as scraper:
@@ -139,10 +130,6 @@ async def debug_batch_with_session():
     ]
 
     print("Testing batch processing with persistent session...")
-    if config.proxy_host and config.proxy_port:
-        print(f"Using proxy: {config.proxy_host}:{config.proxy_port}")
-    else:
-        print("No proxy configured (env vars not set)")
 
     try:
         # One browser session for all requests - very efficient!
