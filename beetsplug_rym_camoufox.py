@@ -120,7 +120,6 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
         self.scraper = RYMScraper(
             self.rym_config,
             self.cache_manager,
-            self.session_manager,
             self.browser_manager
         )
 

@@ -204,7 +204,7 @@ class BrowserManager:
             self.logger.error("No more ports available")
             return False
 
-    @retry(stop=stop_after_attempt(lambda self: self.config.max_retries), wait=wait_exponential(multiplier=2, min=2, max=30))
+    @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=30))
     async def navigate_with_protection(self, page: Page, url: str, response_type: str = 'html', **goto_kwargs) -> Optional[Any]:
         """Universal navigation with automatic Cloudflare challenge handling and unified request handling.
 
