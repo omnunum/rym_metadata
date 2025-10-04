@@ -267,6 +267,16 @@ class BrowserManager:
         except ServerOverloadError as e:
             # Handle IP rotation for server overload errors before re-raising
             if await self._handle_server_overload_rotation(page):
+                # For JSON requests, restore CF cookies by navigating to homepage
+                if response_type == 'json':
+                    self.logger.info("JSON request after rotation - navigating to homepage to restore CF cookies")
+                    try:
+                        await page.goto("https://rateyourmusic.com/", wait_until='domcontentloaded')
+                        if await self.is_cloudflare_challenge(page):
+                            await self.solve_cloudflare_challenge(page, "https://rateyourmusic.com/")
+                    except Exception as cookie_error:
+                        self.logger.warning(f"Failed to restore cookies: {cookie_error}")
+
                 self.logger.info("IP rotated, retrying...")
                 # Re-raise to let @retry handle the retry
                 raise
