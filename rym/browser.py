@@ -1,5 +1,6 @@
 """Browser management and Cloudflare handling for RYM scraping."""
 
+import asyncio
 import logging
 import random
 import string
@@ -40,6 +41,13 @@ class BrowserManager:
             'blocked_requests': 0,
             'blocked_types': {}
         }
+
+        # Locks and timestamps for coordinating concurrent page operations
+        # Prevents multiple pages from solving the same challenge or rotating IPs simultaneously
+        self._challenge_lock = asyncio.Lock()        # Only one page solves challenges at a time
+        self._rotation_lock = asyncio.Lock()         # Only one page rotates IP at a time
+        self._last_solve_timestamp = None            # When we last successfully solved a challenge
+        self._last_rotation_timestamp = None         # When we last successfully rotated IP
 
     def get_browser_options(self) -> Dict[str, Any]:
         """Get Camoufox browser options with proxy configuration.
@@ -175,12 +183,20 @@ class BrowserManager:
             # Unexpected status codes (1xx, 3xx) - treat as success for now
             return True
 
-    async def _handle_server_overload_rotation(self, page: Page) -> bool:
-        """Handle server overload with IP rotation and cookie clearing.
+    async def _handle_server_overload_rotation(self, page: Page, request_timestamp: float) -> bool:
+        """Handle IP rotation for server overload errors.
+
+        Uses lock + timestamp pattern to coordinate IP rotation across concurrent pages:
+        - Page 1 (T1): Gets 503 → gets lock → rotates → updates last_rotation_timestamp=T5
+        - Page 2 (T2): Gets 503 → waits → gets lock → sees T2 < T5 (stale) → just retry
+        - Page 2 retry: Uses new IP → success!
+
+        Args:
+            page: The page that encountered the error
+            request_timestamp: When the request that got the error started
 
         Returns:
-            True if rotated successfully and should continue retry
-            False if no more ports available (stop retrying)
+            True if rotation succeeded or error is stale, False if no more IPs available
         """
         if not self.session_manager:
             self.logger.warning("Server overload detected but no session manager available")
@@ -190,23 +206,48 @@ class BrowserManager:
             self.logger.warning("Server overload detected but auto_rotate_on_failure is disabled")
             return False
 
-        self.logger.warning("Server overload detected, rotating IP")
-        self.session_manager.mark_port_blocked()
+        # Acquire lock to coordinate with other pages
+        async with self._rotation_lock:
+            # Double-check pattern with timestamp (same logic as challenge solving):
+            # If our request started BEFORE the last rotation, we're looking at a stale error
+            # from the old IP. Just return True to signal retry - IP is already fresh.
 
-        if self.session_manager.rotate_port():
-            self.logger.info("Rotated to new port, clearing cookies")
-            browser_context = page.context
-            await browser_context.clear_cookies()
+            if self._last_rotation_timestamp and request_timestamp < self._last_rotation_timestamp:
+                # Scenario: Page 2 waiting for Page 1 to rotate
+                # - Page 1 got 503 at T1, rotated at T5, set last_rotation_timestamp=T5
+                # - Page 2 got 503 at T2 (with old IP), waiting for lock
+                # - Page 2 gets here: T2 < T5 = True → stale error!
+                # - Just return True to retry - IP is already fresh from Page 1's rotation
+                self.logger.info("Stale server error (occurred before last rotation), retrying with new IP...")
+                return True
 
-            self.logger.info("IP rotated successfully, challenges will be handled automatically on next request")
-            return True
-        else:
-            self.logger.error("No more ports available")
-            return False
+            # Fresh error - need to actually rotate IP
+            self.logger.warning("Server overload detected, rotating IP")
+            self.session_manager.mark_port_blocked()
+
+            if self.session_manager.rotate_port():
+                self.logger.info("Rotated to new port, clearing cookies")
+                browser_context = page.context
+                await browser_context.clear_cookies()
+
+                # Update timestamp only on successful rotation
+                self._last_rotation_timestamp = time.time()
+                self.logger.info("IP rotated successfully, challenges will be handled automatically on next request")
+                return True
+            else:
+                self.logger.error("No more ports available")
+                return False
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=30))
     async def navigate_with_protection(self, page: Page, url: str, response_type: str = 'html', **goto_kwargs) -> Optional[Any]:
         """Universal navigation with automatic Cloudflare challenge handling and unified request handling.
+
+        Uses lock + timestamp pattern to coordinate challenge solving across concurrent pages:
+        - Page 1 (T1): Hits challenge → gets lock → solves → updates last_solve_timestamp=T5
+        - Page 2 (T2): Hits challenge → waits for lock → gets lock → sees T2 < T5 (stale) → raises to retry
+        - Page 2 retry: Navigates with fresh cookies → success!
+
+        Only one page actually solves the challenge, others just retry once it's solved.
 
         Args:
             page: Playwright page instance (caller manages lifecycle)
@@ -218,6 +259,8 @@ class BrowserManager:
             For HTML: HTML string content or None if failed
             For JSON: Parsed JSON object or None if failed
         """
+        request_timestamp = time.time()  # Track when this request started
+
         try:
             # 1. Make the request (branch by request type)
             if response_type == 'json':
@@ -227,24 +270,39 @@ class BrowserManager:
                 self.logger.debug(f"Navigating to {url}")
                 response = await page.goto(url, **goto_kwargs)
 
-            # 2. Unified challenge detection and handling
+            # 2. Check for Cloudflare challenge
             if await self.is_cloudflare_challenge(page):
-                self.logger.info("Cloudflare challenge detected")
+                # Acquire lock to coordinate with other pages
+                async with self._challenge_lock:
+                    # Double-check pattern with timestamp:
+                    # - If our request started BEFORE the last solve, we're looking at a stale challenge page
+                    # - Just raise to retry - the cookies are already good from the other page's solve
+                    # - If our request started AFTER (or no solve yet), this is a fresh challenge we need to solve
 
-                # Solve challenge or raise to let @retry handle it
-                if not await self.solve_cloudflare_challenge(page, url):
-                    raise Exception("Cloudflare challenge solving failed")
+                    if self._last_solve_timestamp and request_timestamp < self._last_solve_timestamp:
+                        # Scenario: Page 2 waiting for Page 1 to solve
+                        # - Page 1 started at T1, solved at T5, set last_solve_timestamp=T5
+                        # - Page 2 started at T2 (before T5), sitting on stale challenge
+                        # - Page 2 gets here: T2 < T5 = True → stale!
+                        # - Just retry navigation - cookies are already fresh
+                        self.logger.info("Stale challenge page (requested before last solve), retrying with fresh cookies...")
+                        raise Exception("Stale challenge page, retrying with fresh cookies")
+                    else:
+                        # Scenario: Page 1 - first to encounter challenge, or all pages failed
+                        # - No last_solve_timestamp yet, OR
+                        # - Our request_timestamp >= last_solve_timestamp (fresh challenge despite previous solve)
+                        # - We need to actually solve this challenge
+                        self.logger.info("Cloudflare challenge detected")
 
-                # Retry the request after solving challenge
-                self.logger.info("Challenge solved, retrying request")
-                if response_type == 'json':
-                    response = await page.request.get(url)
-                else:
-                    response = await page.goto(url, **goto_kwargs)
+                        if not await self.solve_cloudflare_challenge(page, url):
+                            raise Exception("Cloudflare challenge solving failed")
 
-                # If still getting challenge, raise to retry
-                if await self.is_cloudflare_challenge(page):
-                    raise Exception("Still getting Cloudflare challenge after solving")
+                        # Update timestamp only on successful solve
+                        self._last_solve_timestamp = time.time()
+                        self.logger.info("Challenge solved successfully, retrying navigation...")
+
+                        # Raise to trigger @retry with fresh cookies
+                        raise Exception("Challenge solved, retrying navigation with fresh cookies")
 
             # 3. Unified status checking
             if response and hasattr(response, 'status'):
@@ -266,7 +324,7 @@ class BrowserManager:
 
         except ServerOverloadError as e:
             # Handle IP rotation for server overload errors before re-raising
-            if await self._handle_server_overload_rotation(page):
+            if await self._handle_server_overload_rotation(page, request_timestamp):
                 # For JSON requests, restore CF cookies by navigating to homepage
                 if response_type == 'json':
                     self.logger.info("JSON request after rotation - navigating to homepage to restore CF cookies")
