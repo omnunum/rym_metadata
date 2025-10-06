@@ -93,7 +93,14 @@ class RYMScraper:
             self._browser_context = await self._browser.new_context()
             self.logger.debug("Browser session and context started successfully")
 
-            # Session cookie management is now handled by browser manager
+            # Load saved session cookies if available
+            # NOTE: This attempts to reuse cookies from previous sessions. This can help reduce
+            # challenge frequency if starting with the same IP (e.g., const session type).
+            # However, with port-based rotation, the IP may have changed since last run, making
+            # these cookies invalid. Cloudflare may reject them or present a challenge.
+            # If this causes issues (false positives, bans), it's safe to remove this line -
+            # the first request will simply hit a challenge and get fresh cookies for current IP.
+            await self.browser_manager.apply_session_cookies_to_context(self._browser_context)
 
         except (ConnectionError, TimeoutError) as e:
             self.logger.error(f"Network error starting browser session: {e}")
@@ -191,7 +198,7 @@ class RYMScraper:
 
         # Delegate everything to browser
         result = await self.browser_manager.navigate_with_protection(
-            page, url, response_type=response_type, wait_until='domcontentloaded'
+            page, url, response_type=response_type
         )
 
         # Update scraper timing for rate limiting
@@ -757,7 +764,7 @@ class RYMScraper:
                 # Navigate to the artist page to extract artist_id
                 await self._wait_for_rate_limit()
                 success = await self.browser_manager.navigate_with_protection(
-                    page, artist_page_url, wait_until='domcontentloaded'
+                    page, artist_page_url
                 )
                 if not success:
                     self.logger.warning("Could not navigate to artist page, discography search failed")
@@ -1119,7 +1126,7 @@ class RYMScraper:
             url = f"{BASE_URL}/genres"
             self.logger.info(f"Fetching genre hierarchy from {url}")
             success = await self.browser_manager.navigate_with_protection(
-                page, url, wait_until='domcontentloaded'
+                page, url
             )
             if not success:
                 self.logger.error("Failed to navigate to genres page")

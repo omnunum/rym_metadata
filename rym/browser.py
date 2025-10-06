@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Dict, Optional, Any
 
-from playwright.async_api import Page
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 from camoufox_captcha import solve_captcha
@@ -170,11 +170,14 @@ class BrowserManager:
 
         Returns:
             True: 200-299, success
-            False: 400-499, client error - don't retry
-            Raises ServerOverloadError: 500-599, server error - retry via @retry decorator
+            False: 400-499, client error - don't retry (except 403)
+            Raises ServerOverloadError: 403, 500-599 - triggers IP rotation
         """
         if 200 <= status_code < 300:
             return True
+        elif status_code == 403:
+            # 403 from Cloudflare typically means IP is blocked - rotate
+            raise ServerOverloadError(status_code, f"IP blocked (403) - rotating")
         elif 400 <= status_code < 500:
             return False
         elif 500 <= status_code < 600:
@@ -239,7 +242,7 @@ class BrowserManager:
                 return False
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=30))
-    async def navigate_with_protection(self, page: Page, url: str, response_type: str = 'html', **goto_kwargs) -> Optional[Any]:
+    async def navigate_with_protection(self, page: Page, url: str, response_type: str = 'html') -> Optional[Any]:
         """Universal navigation with automatic Cloudflare challenge handling and unified request handling.
 
         Uses lock + timestamp pattern to coordinate challenge solving across concurrent pages:
@@ -253,7 +256,6 @@ class BrowserManager:
             page: Playwright page instance (caller manages lifecycle)
             url: Target URL to navigate to
             response_type: 'html' for HTML navigation or 'json' for JSON API requests
-            **goto_kwargs: Arguments passed to page.goto() (wait_until, timeout, etc.)
 
         Returns:
             For HTML: HTML string content or None if failed
@@ -267,11 +269,27 @@ class BrowserManager:
                 self.logger.debug(f"Making JSON request to {url}")
                 response = await page.request.get(url)
             else:
+                # For HTML navigation, use wait_until='commit' to only wait for HTTP response
+                # This allows fast-fail on errors without waiting for DOM to load
                 self.logger.debug(f"Navigating to {url}")
-                response = await page.goto(url, **goto_kwargs)
+                try:
+                    response = await page.goto(url, wait_until='commit', timeout=10000)
+                except PlaywrightTimeoutError as e:
+                    self.logger.error(f"Timeout during navigation to {url}: {e}")
+                    raise
 
-            # 2. Check for Cloudflare challenge
-            if await self.is_cloudflare_challenge(page):
+            # 2. Check for Cloudflare challenge FIRST (before status check)
+            # Challenge pages can have 403 status, so we need to detect and solve them
+            # before treating 403 as a block/ban that triggers IP rotation
+            if await self.is_cloudflare_challenge(response):
+                # For HTML responses, wait for network idle before solving
+                # (challenge solving needs iframe injected by JavaScript)
+                if response_type == 'html':
+                    try:
+                        await page.wait_for_load_state('networkidle', timeout=30000)
+                    except PlaywrightTimeoutError as e:
+                        self.logger.error(f"Timeout waiting for network idle on challenge page {url}: {e}")
+                        raise
                 # Acquire lock to coordinate with other pages
                 async with self._challenge_lock:
                     # Double-check pattern with timestamp:
@@ -304,13 +322,23 @@ class BrowserManager:
                         # Raise to trigger @retry with fresh cookies
                         raise Exception("Challenge solved, retrying navigation with fresh cookies")
 
-            # 3. Unified status checking
+            # 3. Not a challenge - check status code for errors
+            # Fast-fail on 404s and other client errors, raise on 403/5xx for IP rotation
             if response and hasattr(response, 'status'):
                 if not self._handle_response_status(response.status):
                     self.logger.warning(f"Request failed with status {response.status}")
                     return None
 
-            # 4. Return appropriate content (branch by response type)
+            # 4. For HTML responses with successful status, now wait for DOM to load
+            # (We already waited if it was a challenge page above)
+            if response_type == 'html':
+                try:
+                    await page.wait_for_load_state('domcontentloaded', timeout=15000)
+                except PlaywrightTimeoutError as e:
+                    self.logger.error(f"Timeout waiting for DOMContentLoaded on {url}: {e}")
+                    raise
+
+            # 5. Return appropriate content (branch by response type)
             if response_type == 'json':
                 json_data = await response.json()
                 self.logger.debug(f"Successfully parsed JSON response")
@@ -329,13 +357,11 @@ class BrowserManager:
                 if response_type == 'json':
                     self.logger.info("JSON request after rotation - navigating to homepage to restore CF cookies")
                     try:
-                        await page.goto("https://rateyourmusic.com/", wait_until='domcontentloaded')
-                        if await self.is_cloudflare_challenge(page):
+                        homepage_response = await page.goto("https://rateyourmusic.com/", wait_until='domcontentloaded')
+                        if await self.is_cloudflare_challenge(homepage_response):
                             await self.solve_cloudflare_challenge(page, "https://rateyourmusic.com/")
                     except Exception as cookie_error:
                         self.logger.warning(f"Failed to restore cookies: {cookie_error}")
-
-                self.logger.info("IP rotated, retrying...")
                 # Re-raise to let @retry handle the retry
                 raise
             else:
@@ -347,24 +373,35 @@ class BrowserManager:
             # Re-raise to let @retry handle it
             raise
 
-    async def is_cloudflare_challenge(self, page: Page) -> bool:
-        """Detect if current page is showing a Cloudflare challenge."""
+    async def is_cloudflare_challenge(self, response: Optional[Any]) -> bool:
+        """Detect if response is a Cloudflare challenge page.
+
+        Uses the official cf-mitigated response header.
+
+        Args:
+            response: HTTP response object from page.goto() or page.request.get()
+
+        Returns:
+            True if challenge detected, False otherwise
+        """
         try:
-            page_content = await page.content()
-            challenge_indicators = ['cloudflare', 'just a moment', 'checking your browser', 'ray id']
+            if not response or not hasattr(response, 'headers'):
+                self.logger.debug("No response object available for challenge detection")
+                return False
 
-            content_lower = page_content.lower()
-            for indicator in challenge_indicators:
-                if indicator in content_lower:
-                    self.logger.debug(f"Detected Cloudflare challenge indicator: '{indicator}'")
-                    return True
+            # Check cf-mitigated header (official Cloudflare method)
+            cf_mitigated = response.headers.get('cf-mitigated')
 
-            self.logger.debug("No Cloudflare challenge indicators found in page content")
+            if cf_mitigated == 'challenge':
+                self.logger.debug("Cloudflare challenge detected via cf-mitigated header")
+                return True
+
+            self.logger.debug(f"No challenge detected (cf-mitigated={cf_mitigated})")
             return False
 
         except Exception as e:
             self.logger.warning(f"Error detecting challenge: {e}")
-            return True  # Assume challenge present if we can't detect
+            return False
 
     async def solve_cloudflare_challenge(self, page: Page, url: str) -> bool:
         """Solve Cloudflare challenge using camoufox-captcha library."""
