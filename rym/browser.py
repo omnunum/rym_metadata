@@ -283,9 +283,6 @@ class BrowserManager:
             await page.wait_for_load_state('networkidle', timeout=30000)
             if not await self.solve_cloudflare_challenge(page, "https://rateyourmusic.com/"):
                 raise Exception("Challenge solving failed on homepage")
-            # Wait after solving to avoid rate limits
-            self.logger.info("Challenge solved, waiting 5s to avoid rate limits...")
-            await asyncio.sleep(5)
 
         else:
             self.logger.info("No challenge on homepage")
@@ -299,9 +296,6 @@ class BrowserManager:
                 raise Exception("Challenge solving failed")
 
             self._last_solve_timestamp = time.time()
-            # Wait after solving to avoid rate limits
-            self.logger.info("Challenge solved, waiting 5s to avoid rate limits...")
-            await asyncio.sleep(5)
 
     @staticmethod
     def _with_protection(response_type: str = 'html'):
@@ -712,11 +706,6 @@ class BrowserManager:
 
             if success:
                 self.logger.info("Successfully solved Cloudflare challenge!")
-
-                # CRITICAL: Additional wait after solve to ensure cookies are fully set
-                # Cloudflare may still be processing verification in background
-                self.logger.debug("Waiting additional 3 seconds for cookie propagation...")
-                await asyncio.sleep(3)
 
                 # Extract and save cookies if we have session manager
                 if self.session_manager:

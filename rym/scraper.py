@@ -50,6 +50,11 @@ class RYMScraper:
         # Rate limiting
         self._last_request_time: Optional[float] = None
 
+        # Global request serialization lock to prevent concurrent challenge solving
+        # This ensures only one request is active at a time, preventing race conditions
+        # when multiple requests hit Cloudflare challenges simultaneously
+        self._request_lock = asyncio.Lock()
+
         # Browser state management - only browser context, pages created as needed
         self._browser = None
         self._browser_context = None
@@ -220,62 +225,43 @@ class RYMScraper:
         Returns:
             Tuple of (genres, descriptors) lists, or None if not found
         """
-        page = await self._create_page()
-        try:
-            self.logger.info(f"Searching for album: {artist} - {album}")
+        # Serialize all requests to prevent concurrent challenge solving attempts
+        async with self._request_lock:
+            page = await self._create_page()
+            try:
+                self.logger.info(f"Searching for album: {artist} - {album}")
 
-            # Check release content cache first
-            if self.cache_manager:
-                cached_html = self.cache_manager.get_cached_content("release", artist, album)
-                if cached_html:
-                    genres, descriptors = self._extract_genres_from_html(cached_html)
-                    if genres or descriptors:
-                        return genres, descriptors
-
-            # Try direct album URL
-            direct_url = self.build_direct_url(artist, album, album_type)
-            self.logger.debug(f"Trying direct album URL: {direct_url}")
-
-            html = await self.navigate_page_with_rate_limiting(direct_url, page)
-            genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
-
-            # Cache successful album result
-            if html and (genres or descriptors) and self.cache_manager:
-                self.cache_manager.save_content("release", artist, html, album)
-
-            # If direct URL fails, try artist ID cache + discography search
-            if not genres:
-                self.logger.info(f"Direct album URL failed, checking artist ID cache for {artist}")
-
-                cached_artist_id = None
+                # Check release content cache first
                 if self.cache_manager:
-                    cached_artist_id = self.cache_manager.lookup_artist_id(artist)
+                    cached_html = self.cache_manager.get_cached_content("release", artist, album)
+                    if cached_html:
+                        genres, descriptors = self._extract_genres_from_html(cached_html)
+                        if genres or descriptors:
+                            return genres, descriptors
 
-                if cached_artist_id:
-                    # Use cached artist ID for direct discography search
-                    self.logger.info(f"Using cached artist ID for discography search")
-                    album_url = await self._search_discography_by_artist_id(cached_artist_id, album, page, year)
+                # Try direct album URL
+                direct_url = self.build_direct_url(artist, album, album_type)
+                self.logger.debug(f"Trying direct album URL: {direct_url}")
 
-                    if album_url:
-                        html = await self.navigate_page_with_rate_limiting(album_url, page)
-                        genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
+                html = await self.navigate_page_with_rate_limiting(direct_url, page)
+                genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
 
-                        # Cache successful result
-                        if html and (genres or descriptors) and self.cache_manager:
-                            self.cache_manager.save_content("release", artist, html, album)
-                    else:
-                        # Artist exists (we have cached ID) but album not found in discography
-                        # No point in doing redundant artist search - fail fast
-                        self.logger.info(f"Artist {artist} found in cache but album {album} not in discography")
+                # Cache successful album result
+                if html and (genres or descriptors) and self.cache_manager:
+                    self.cache_manager.save_content("release", artist, html, album)
 
-                # Only try full artist page approach if we don't have cached artist ID
-                else:
-                    self.logger.info(f"No cached artist ID, trying full artist page approach for {artist} - {album}")
+                # If direct URL fails, try artist ID cache + discography search
+                if not genres:
+                    self.logger.info(f"Direct album URL failed, checking artist ID cache for {artist}")
 
-                    artist_page_url = await self._get_artist_page_url(artist, page)
+                    cached_artist_id = None
+                    if self.cache_manager:
+                        cached_artist_id = self.cache_manager.lookup_artist_id(artist)
 
-                    if artist_page_url:
-                        album_url = await self._search_artist_discography(artist_page_url, album, page, year)
+                    if cached_artist_id:
+                        # Use cached artist ID for direct discography search
+                        self.logger.info(f"Using cached artist ID for discography search")
+                        album_url = await self._search_discography_by_artist_id(cached_artist_id, album, page, year)
 
                         if album_url:
                             html = await self.navigate_page_with_rate_limiting(album_url, page)
@@ -284,20 +270,41 @@ class RYMScraper:
                             # Cache successful result
                             if html and (genres or descriptors) and self.cache_manager:
                                 self.cache_manager.save_content("release", artist, html, album)
+                        else:
+                            # Artist exists (we have cached ID) but album not found in discography
+                            # No point in doing redundant artist search - fail fast
+                            self.logger.info(f"Artist {artist} found in cache but album {album} not in discography")
 
-            # Return results or None
-            if genres or descriptors:
-                return genres, descriptors
-            else:
-                self.logger.info(f"No genres found for {artist} - {album}")
+                    # Only try full artist page approach if we don't have cached artist ID
+                    else:
+                        self.logger.info(f"No cached artist ID, trying full artist page approach for {artist} - {album}")
+
+                        artist_page_url = await self._get_artist_page_url(artist, page)
+
+                        if artist_page_url:
+                            album_url = await self._search_artist_discography(artist_page_url, album, page, year)
+
+                            if album_url:
+                                html = await self.navigate_page_with_rate_limiting(album_url, page)
+                                genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
+
+                                # Cache successful result
+                                if html and (genres or descriptors) and self.cache_manager:
+                                    self.cache_manager.save_content("release", artist, html, album)
+
+                # Return results or None
+                if genres or descriptors:
+                    return genres, descriptors
+                else:
+                    self.logger.info(f"No genres found for {artist} - {album}")
+                    return None, None
+
+            except Exception as e:
+                self.logger.error(f"Error processing {artist} - {album}: {e}")
                 return None, None
-
-        except Exception as e:
-            self.logger.error(f"Error processing {artist} - {album}: {e}")
-            return None, None
-        finally:
-            # Close page to prevent memory leaks during long sessions
-            await page.close()
+            finally:
+                # Close page to prevent memory leaks during long sessions
+                await page.close()
 
     async def get_artist_genres_and_descriptors(self, artist: str) -> Optional[tuple[list[str], list[str]]]:
         """Get genre and descriptor information for a specific artist.
@@ -308,57 +315,59 @@ class RYMScraper:
         Returns:
             Tuple of (genres, descriptors) lists, or None if not found
         """
-        page = await self._create_page()
-        try:
-            self.logger.info(f"Searching for artist: {artist}")
+        # Serialize all requests to prevent concurrent challenge solving attempts
+        async with self._request_lock:
+            page = await self._create_page()
+            try:
+                self.logger.info(f"Searching for artist: {artist}")
 
-            # Check artist content cache first
-            if self.cache_manager:
-                cached_html = self.cache_manager.get_cached_content("artist", artist)
-                if cached_html:
-                    genres, descriptors = self._extract_genres_from_html(cached_html, "artist")
-                    if genres or descriptors:
-                        return genres, descriptors
+                # Check artist content cache first
+                if self.cache_manager:
+                    cached_html = self.cache_manager.get_cached_content("artist", artist)
+                    if cached_html:
+                        genres, descriptors = self._extract_genres_from_html(cached_html, "artist")
+                        if genres or descriptors:
+                            return genres, descriptors
 
-            # Try direct artist URL
-            direct_url = self.build_artist_url(artist)
-            self.logger.debug(f"Trying direct artist URL: {direct_url}")
+                # Try direct artist URL
+                direct_url = self.build_artist_url(artist)
+                self.logger.debug(f"Trying direct artist URL: {direct_url}")
 
-            html = await self.navigate_page_with_rate_limiting(direct_url, page)
-            genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
+                html = await self.navigate_page_with_rate_limiting(direct_url, page)
+                genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
 
-            # Cache successful artist result
-            if html and (genres or descriptors) and self.cache_manager:
-                self.cache_manager.save_content("artist", artist, html)
+                # Cache successful artist result
+                if html and (genres or descriptors) and self.cache_manager:
+                    self.cache_manager.save_content("artist", artist, html)
 
-            # If direct artist URL fails, try artist search
-            if not genres:
-                self.logger.debug(f"Direct artist URL failed, searching for artist {artist}")
-                search_url = self.build_artist_search_url(artist)
+                # If direct artist URL fails, try artist search
+                if not genres:
+                    self.logger.debug(f"Direct artist URL failed, searching for artist {artist}")
+                    search_url = self.build_artist_search_url(artist)
 
-                artist_url = await self._search_artist_url(search_url, page, artist)
+                    artist_url = await self._search_artist_url(search_url, page, artist)
 
-                if artist_url:
-                    html = await self.navigate_page_with_rate_limiting(artist_url, page)
-                    genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
+                    if artist_url:
+                        html = await self.navigate_page_with_rate_limiting(artist_url, page)
+                        genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
 
-                    # Cache successful result
-                    if html and (genres or descriptors) and self.cache_manager:
-                        self.cache_manager.save_content("artist", artist, html)
+                        # Cache successful result
+                        if html and (genres or descriptors) and self.cache_manager:
+                            self.cache_manager.save_content("artist", artist, html)
 
-            # Return results or None
-            if genres or descriptors:
-                return genres, descriptors
-            else:
-                self.logger.info(f"No genres found for artist {artist}")
+                # Return results or None
+                if genres or descriptors:
+                    return genres, descriptors
+                else:
+                    self.logger.info(f"No genres found for artist {artist}")
+                    return None, None
+
+            except Exception as e:
+                self.logger.error(f"Error processing artist {artist}: {e}")
                 return None, None
-
-        except Exception as e:
-            self.logger.error(f"Error processing artist {artist}: {e}")
-            return None, None
-        finally:
-            # Close page to prevent memory leaks during long sessions
-            await page.close()
+            finally:
+                # Close page to prevent memory leaks during long sessions
+                await page.close()
 
 
     async def process_single_album(self, album_obj: Any, dry_run: bool = False) -> Optional[tuple[Any, Dict[str, Any]]]:
