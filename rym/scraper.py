@@ -599,7 +599,7 @@ class RYMScraper:
             self.logger.error(f"Error parsing discography HTML: {e}")
             return []
 
-    async def _search_discography_via_post(self, browser_context: Any, artist_id: str, album: str) -> List[DiscographyCandidate]:
+    async def _search_discography_via_post(self, page: Any, artist_id: str, album: str) -> List[DiscographyCandidate]:
         """Search discography using direct POST request to FilterDiscography endpoint."""
         try:
             # Prepare form data for the POST request
@@ -616,19 +616,20 @@ class RYMScraper:
             self.logger.info(f"Making POST request to FilterDiscography for artist_id={artist_id}, album='{album}'")
             self.logger.debug(f"Form data: {form_data}")
 
-            # Use browser context's request API to inherit cookies
-            api_request = browser_context.request
-            response = await api_request.post(
+            # Use navigate_with_protection for POST request
+            # This handles challenges, 503 errors, and IP rotation automatically
+            response_text = await self.browser_manager.navigate_with_protection(
+                page,
                 f'{BASE_URL}/httprequest/FilterDiscography',
-                form=form_data
+                response_type='json',
+                method='POST',
+                form_data=form_data
             )
 
-            if response.status != 200:
-                self.logger.warning(f"FilterDiscography POST request failed with status {response.status}")
+            if not response_text:
+                self.logger.warning("FilterDiscography POST request returned empty response")
                 return []
 
-            # Get response text
-            response_text = await response.text()
             self.logger.debug(f"FilterDiscography response: {response_text[:200]}...")
 
             # Parse HTML from JavaScript response
@@ -727,8 +728,7 @@ class RYMScraper:
 
         try:
             # Use POST approach to search discography
-            browser_context = page.context
-            candidates = await self._search_discography_via_post(browser_context, artist_id, album)
+            candidates = await self._search_discography_via_post(page, artist_id, album)
 
             # Score candidates and return best match
             if candidates:

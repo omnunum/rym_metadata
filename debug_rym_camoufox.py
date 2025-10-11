@@ -9,8 +9,8 @@ from rym.dataclasses import RYMConfig
 async def debug_album_async():
     """Test fetching genre info for a single album using the simplified API."""
 
-    # Enable info level logging (use DEBUG for more verbose resource blocking logs)
-    logging.basicConfig(level=logging.INFO)
+    # Enable DEBUG level logging to see all response headers and content validation
+    logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(name)s:%(message)s')
 
     # Create config with proxy settings from environment variables
     config = RYMConfig(

@@ -40,12 +40,22 @@ class ProxySessionManager:
                 self.logger.warning(f"Failed to load state file: {e}, creating new state")
 
         # Create new state with first available port
-        blocked_ports = []
-        initial_port = self._find_next_available_port(self.config.port_range_start - 1, blocked_ports)
+        # If proxy_port is set and port-based rotation is enabled, use it as the starting port
+        # Otherwise use port_range_start
+        if self.config.proxy_rotation_method == 'port' and self.config.proxy_port:
+            initial_port = self.config.proxy_port
+            port_min = self.config.proxy_port
+            port_max = self.config.port_range_end
+        else:
+            blocked_ports: List[int] = []
+            initial_port = self._find_next_available_port(self.config.port_range_start - 1, blocked_ports)
+            port_min = self.config.port_range_start
+            port_max = self.config.port_range_end
+
         return SessionState(
             current_port=initial_port,
-            port_range_min=self.config.port_range_start,
-            port_range_max=self.config.port_range_end
+            port_range_min=port_min,
+            port_range_max=port_max
         )
 
     def _save_state(self) -> None:

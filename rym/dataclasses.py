@@ -28,6 +28,7 @@ class RYMConfig:
     max_retries: int = 5
     retry_delay: float = 2.0
     page_timeout: int = 30000
+    headless: bool = True  # Run browser in headless mode (set to False for debugging captchas)
 
     # Rate limiting
     min_request_interval: float = 3.0  # Minimum seconds between requests (0 = disabled)
@@ -79,6 +80,7 @@ class RYMConfig:
             max_retries=config['max_retries'].get(3),
             retry_delay=config['retry_delay'].get(2.0),
             page_timeout=config['page_timeout'].get(30000),
+            headless=config['headless'].get(True),
 
             # Rate limiting
             min_request_interval=config['min_request_interval'].get(3.0),

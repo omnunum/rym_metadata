@@ -58,26 +58,37 @@ class BrowserManager:
             # Build username with session control (if supported by proxy service)
             username = self._build_proxy_username()
 
+            # Build proxy URL with current port (for port-based rotation)
+            if self.config.proxy_rotation_method == 'port' and self.session_manager:
+                current_port = self.session_manager.get_current_port()
+                protocol = "https" if self.config.proxy_use_tls else "http"
+                proxy_url = f"{protocol}://{self.config.proxy_host}:{current_port}"
+            else:
+                proxy_url = self.config.proxy_server_url
+
             browser_proxy_config = {
-                "server": self.config.proxy_server_url,
+                "server": proxy_url,
                 "username": username,
                 "password": self.config.proxy_password
             }
-            self.logger.debug(f"Using proxy: {self.config.proxy_server_url}")
+            self.logger.debug(f"Using proxy: {proxy_url}")
             self.logger.debug(f"Proxy username: {username}")
             self.logger.debug("Proxy config created successfully")
 
         # Browser options optimized for Cloudflare captcha solving with camoufox-captcha
         browser_options = {
-            'headless': True,  # Run in headless mode
-            'humanize': False,  # Disable for captcha solving (recommended by camoufox-captcha)
-            'geoip': True if browser_proxy_config else False,  # Enable geoip when using proxy for better stealth
-            'disable_coop': True,  # Required for challenge solving
-            'i_know_what_im_doing': True,  # Acknowledge COOP disable warning
-            'config': {'forceScopeAccess': True},  # Required for closed Shadow DOM traversal
-            'window': (1280, 720),  # Proper viewport size for challenges
+            'headless': self.config.headless,  # Configurable: set to False in config for debugging
+            'humanize': False,  # Required: Disable for captcha solving (recommended by camoufox-captcha)
+            'geoip': True,  # Required: Enable for realistic fingerprinting (especially with proxy)
+            'disable_coop': True,  # Required: Essential for security bypass and Shadow DOM traversal
+            'i_know_what_im_doing': True,  # Required: Acknowledge COOP disable warning
+            'config': {'forceScopeAccess': True},  # Required: Essential for closed Shadow DOM traversal
+            'window': (1280, 720),  # Proper viewport size for consistent challenge rendering
             'args': ['--ignore-certificate-errors', '--accept-insecure-certs']  # For any HTTPS fallbacks
         }
+
+        if not self.config.headless:
+            self.logger.info("Running in non-headless mode for debugging")
 
         # Add proxy if configured
         if browser_proxy_config:
@@ -102,10 +113,11 @@ class BrowserManager:
             return
 
         # Define blocked domains/paths that are safe to block
+        # Note: Allowing googletagmanager and other tracking scripts to ensure
+        # session cookies like _pubcid are properly set
         blocked_domains = {
             'e.snmc.io',  # RateYourMusic CDN for images and assets
-            'gstatic', # Google static content (fonts, etc.)
-            'googletagmanager'
+            'gstatic'  # Google static content (fonts, etc.)
         }
 
         blocked_paths = {
@@ -131,13 +143,11 @@ class BrowserManager:
             self.bandwidth_stats['total_requests'] += 1
 
             should_block = False
-            block_reason = ""
 
             # Check if domain is in blocklist
             for domain in blocked_domains:
                 if domain in request_url:
                     should_block = True
-                    block_reason = f"blocked domain: {domain}"
                     break
 
             # Check if path contains blocked patterns
@@ -145,20 +155,29 @@ class BrowserManager:
                 for path_pattern in blocked_paths:
                     if path_pattern in request_url.lower():
                         should_block = True
-                        block_reason = f"blocked path pattern: {path_pattern}"
                         break
 
             if should_block:
                 await route.abort()
                 self.bandwidth_stats['blocked_requests'] += 1
                 self.bandwidth_stats['blocked_types'][resource_type] = self.bandwidth_stats['blocked_types'].get(resource_type, 0) + 1
-                if self.logger.isEnabledFor(logging.DEBUG):
-                    self.logger.debug(f"Blocked {resource_type} ({block_reason}): {request_url}")
             else:
-                # Allow all other resources
-                if self.logger.isEnabledFor(logging.DEBUG):
-                    self.logger.debug(f"Allowing {resource_type}: {request_url}")
-                await route.continue_()
+                # CRITICAL FIX: Firefox 133+ iframe caching bug workaround
+                # Only apply fetch/fulfill pattern to iframe subdocuments (where Turnstile loads)
+                # Applying to all requests breaks response bodies for main documents
+                # See: https://github.com/daijro/camoufox/issues/150
+                if resource_type == 'iframe' or resource_type == 'subdocument':
+                    try:
+                        response = await route.fetch()
+                        await route.fulfill(body=await response.body())
+                    except Exception as e:
+                        # Fallback to normal continue if fetch/fulfill fails
+                        if self.logger.isEnabledFor(logging.DEBUG):
+                            self.logger.debug(f"Route fetch/fulfill failed for iframe {request_url}, using continue: {e}")
+                        await route.continue_()
+                else:
+                    # For all other resource types, use normal routing
+                    await route.continue_()
 
         # Set up route blocking for all requests
         await page.route("**/*", handle_route)
@@ -241,191 +260,245 @@ class BrowserManager:
                 self.logger.error("No more ports available")
                 return False
 
+    def _is_challenge(self, response, content: str) -> bool:
+        """Simple challenge detection using header and content."""
+        # Method 1: Check cf-mitigated header
+        if hasattr(response, 'headers') and response.headers.get('cf-mitigated') == 'challenge':
+            return True
+
+        # Method 2: Check for challenge HTML in content
+        if 'Just a moment...' in content and '<title>Just a moment...</title>' in content:
+            return True
+
+        return False
+
+    async def _solve_challenge_on_homepage(self, page: Page):
+        """Navigate to homepage and solve challenge if present."""
+        self.logger.info("Navigating to homepage to solve challenge...")
+        response = await page.goto("https://rateyourmusic.com/", wait_until='domcontentloaded')
+        html = await page.content()
+
+        if self._is_challenge(response, html):
+            self.logger.info("Challenge detected on homepage, solving...")
+            await page.wait_for_load_state('networkidle', timeout=30000)
+            if not await self.solve_cloudflare_challenge(page, "https://rateyourmusic.com/"):
+                raise Exception("Challenge solving failed on homepage")
+            # Wait after solving to avoid rate limits
+            self.logger.info("Challenge solved, waiting 5s to avoid rate limits...")
+            await asyncio.sleep(5)
+
+        else:
+            self.logger.info("No challenge on homepage")
+
+    async def _solve_challenge_on_current_page(self, page: Page, url: str):
+        """Solve challenge on the current page."""
+        await page.wait_for_load_state('networkidle', timeout=30000)
+
+        async with self._challenge_lock:
+            if not await self.solve_cloudflare_challenge(page, url):
+                raise Exception("Challenge solving failed")
+
+            self._last_solve_timestamp = time.time()
+            # Wait after solving to avoid rate limits
+            self.logger.info("Challenge solved, waiting 5s to avoid rate limits...")
+            await asyncio.sleep(5)
+
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=30))
-    async def navigate_with_protection(self, page: Page, url: str, response_type: str = 'html') -> Optional[Any]:
-        """Universal navigation with automatic Cloudflare challenge handling and unified request handling.
-
-        Uses lock + timestamp pattern to coordinate challenge solving across concurrent pages:
-        - Page 1 (T1): Hits challenge → gets lock → solves → updates last_solve_timestamp=T5
-        - Page 2 (T2): Hits challenge → waits for lock → gets lock → sees T2 < T5 (stale) → raises to retry
-        - Page 2 retry: Navigates with fresh cookies → success!
-
-        Only one page actually solves the challenge, others just retry once it's solved.
+    async def navigate_with_protection(self, page: Page, url: str, response_type: str = 'html', method: str = 'GET', form_data: Optional[Dict[str, str]] = None) -> Optional[Any]:
+        """Simplified navigation with automatic Cloudflare challenge handling.
 
         Args:
             page: Playwright page instance (caller manages lifecycle)
             url: Target URL to navigate to
             response_type: 'html' for HTML navigation or 'json' for JSON API requests
+            method: HTTP method ('GET' or 'POST')
+            form_data: Form data for POST requests
 
         Returns:
             For HTML: HTML string content or None if failed
             For JSON: Parsed JSON object or None if failed
         """
-        request_timestamp = time.time()  # Track when this request started
-
         try:
-            # 1. Make the request (branch by request type)
+            # 1. Make the request
             if response_type == 'json':
-                self.logger.debug(f"Making JSON request to {url}")
-                response = await page.request.get(url)
+                self.logger.debug(f"Making {method} request to {url}")
+
+                # Use page.evaluate() with fetch() to make the request from browser context
+                # This ensures all cookies, headers, and browser fingerprints are included
+                if method == 'POST' and form_data:
+                    fetch_result = await page.evaluate("""
+                        async (data) => {
+                            const formData = new FormData();
+                            for (const [key, value] of Object.entries(data.formData)) {
+                                formData.append(key, value);
+                            }
+                            const response = await fetch(data.url, {
+                                method: 'POST',
+                                headers: {
+                                    'X-Requested-With': 'XMLHttpRequest'
+                                },
+                                body: formData,
+                                credentials: 'include'
+                            });
+
+                            const text = await response.text();
+                            const headers = {};
+                            response.headers.forEach((value, key) => {
+                                headers[key] = value;
+                            });
+
+                            return {
+                                status: response.status,
+                                statusText: response.statusText,
+                                headers: headers,
+                                text: text
+                            };
+                        }
+                    """, {'url': url, 'formData': form_data})
+                else:
+                    fetch_result = await page.evaluate("""
+                        async (url) => {
+                            const response = await fetch(url, {
+                                method: 'GET',
+                                headers: {
+                                    'accept': '*/*',
+                                    'referer': 'https://rateyourmusic.com/genres/'
+                                },
+                                credentials: 'include'
+                            });
+
+                            const text = await response.text();
+                            const headers = {};
+                            response.headers.forEach((value, key) => {
+                                headers[key] = value;
+                            });
+
+                            return {
+                                status: response.status,
+                                statusText: response.statusText,
+                                headers: headers,
+                                text: text
+                            };
+                        }
+                    """, url)
+
+                # Create a mock response object that matches what we expect
+                class MockResponse:
+                    def __init__(self, data):
+                        self.status = data['status']
+                        self.statusText = data['statusText']
+                        self.headers = data['headers']
+                        self._text = data['text']
+
+                    async def text(self):
+                        return self._text
+
+                    async def json(self):
+                        import json
+                        return json.loads(self._text)
+
+                response = MockResponse(fetch_result)
             else:
-                # For HTML navigation, use wait_until='commit' to only wait for HTTP response
-                # This allows fast-fail on errors without waiting for DOM to load
                 self.logger.debug(f"Navigating to {url}")
-                try:
-                    response = await page.goto(url, wait_until='commit', timeout=10000)
-                except PlaywrightTimeoutError as e:
-                    self.logger.error(f"Timeout during navigation to {url}: {e}")
-                    raise
+                response = await page.goto(url, wait_until='commit', timeout=10000)
 
-            # 2. Check for Cloudflare challenge FIRST (before status check)
-            # Challenge pages can have 403 status, so we need to detect and solve them
-            # before treating 403 as a block/ban that triggers IP rotation
-            if await self.is_cloudflare_challenge(response):
-                # For HTML responses, wait for network idle before solving
-                # (challenge solving needs iframe injected by JavaScript)
-                if response_type == 'html':
-                    try:
-                        await page.wait_for_load_state('networkidle', timeout=30000)
-                    except PlaywrightTimeoutError as e:
-                        self.logger.error(f"Timeout waiting for network idle on challenge page {url}: {e}")
-                        raise
-                # Acquire lock to coordinate with other pages
-                async with self._challenge_lock:
-                    # Double-check pattern with timestamp:
-                    # - If our request started BEFORE the last solve, we're looking at a stale challenge page
-                    # - Just raise to retry - the cookies are already good from the other page's solve
-                    # - If our request started AFTER (or no solve yet), this is a fresh challenge we need to solve
+            # 2. Get content and check for challenge
+            content = await response.text() if response_type == 'json' else await page.content()
 
-                    if self._last_solve_timestamp and request_timestamp < self._last_solve_timestamp:
-                        # Scenario: Page 2 waiting for Page 1 to solve
-                        # - Page 1 started at T1, solved at T5, set last_solve_timestamp=T5
-                        # - Page 2 started at T2 (before T5), sitting on stale challenge
-                        # - Page 2 gets here: T2 < T5 = True → stale!
-                        # - Just retry navigation - cookies are already fresh
-                        self.logger.info("Stale challenge page (requested before last solve), retrying with fresh cookies...")
-                        raise Exception("Stale challenge page, retrying with fresh cookies")
-                    else:
-                        # Scenario: Page 1 - first to encounter challenge, or all pages failed
-                        # - No last_solve_timestamp yet, OR
-                        # - Our request_timestamp >= last_solve_timestamp (fresh challenge despite previous solve)
-                        # - We need to actually solve this challenge
-                        self.logger.info("Cloudflare challenge detected")
+            if self._is_challenge(response, content):
+                self.logger.info(f"Challenge detected for {url}")
 
-                        if not await self.solve_cloudflare_challenge(page, url):
-                            raise Exception("Cloudflare challenge solving failed")
+                # Cloudflare can challenge API requests separately from HTML pages
+                # We need to navigate to the actual URL that's challenged, not the homepage
+                # This will show the Turnstile challenge widget which we can solve
+                if response_type == 'json':
+                    # For JSON endpoints, solve challenge on homepage (can't solve on JSON response)
+                    await self._solve_challenge_on_homepage(page)
+                else:
+                    # For HTML, solve on current page
+                    await self._solve_challenge_on_current_page(page, url)
 
-                        # Update timestamp only on successful solve
-                        self._last_solve_timestamp = time.time()
-                        self.logger.info("Challenge solved successfully, retrying navigation...")
+                # After solving, retry this request
+                raise Exception("Challenge solved, retrying request")
 
-                        # Raise to trigger @retry with fresh cookies
-                        raise Exception("Challenge solved, retrying navigation with fresh cookies")
-
-            # 3. Not a challenge - check status code for errors
-            # Fast-fail on 404s and other client errors, raise on 403/5xx for IP rotation
-            if response and hasattr(response, 'status'):
-                if not self._handle_response_status(response.status):
+            # 3. Check status code
+            if response.status != 200:
+                if response.status == 503:
+                    raise ServerOverloadError(f"503 error from {url}")
+                elif response.status >= 400:
                     self.logger.warning(f"Request failed with status {response.status}")
                     return None
 
-            # 4. For HTML responses with successful status, now wait for DOM to load
-            # (We already waited if it was a challenge page above)
+            # 4. Wait for DOM load if needed (HTML only)
             if response_type == 'html':
-                try:
-                    await page.wait_for_load_state('domcontentloaded', timeout=15000)
-                except PlaywrightTimeoutError as e:
-                    self.logger.error(f"Timeout waiting for DOMContentLoaded on {url}: {e}")
-                    raise
+                await page.wait_for_load_state('domcontentloaded', timeout=15000)
 
-            # 5. Return appropriate content (branch by response type)
+            # 5. Return content
             if response_type == 'json':
-                json_data = await response.json()
-                self.logger.debug(f"Successfully parsed JSON response")
-                return json_data
+                # For POST requests, return raw text (JavaScript callback format)
+                # For GET requests, parse as JSON
+                if method == 'POST':
+                    return content
+                else:
+                    return await response.json()
             else:
                 html_content = await page.content()
-                # Update session manager if we have one
                 if self.session_manager:
                     self.session_manager.increment_request_count()
+                self.logger.debug(f"Received HTML content: {len(html_content)} bytes")
                 return html_content
 
-        except ServerOverloadError as e:
-            # Handle IP rotation for server overload errors before re-raising
+        except ServerOverloadError:
+            # Handle IP rotation
+            request_timestamp = time.time()
             if await self._handle_server_overload_rotation(page, request_timestamp):
-                # For JSON requests, restore CF cookies by navigating to homepage
-                if response_type == 'json':
-                    self.logger.info("JSON request after rotation - navigating to homepage to restore CF cookies")
-                    try:
-                        homepage_response = await page.goto("https://rateyourmusic.com/", wait_until='domcontentloaded')
-                        if await self.is_cloudflare_challenge(homepage_response):
-                            await self.solve_cloudflare_challenge(page, "https://rateyourmusic.com/")
-                    except Exception as cookie_error:
-                        self.logger.warning(f"Failed to restore cookies: {cookie_error}")
-                # Re-raise to let @retry handle the retry
-                raise
+                self.logger.info("IP rotated, retrying request")
+                raise  # Let @retry handle the retry
             else:
-                self.logger.error("No more IPs available, giving up")
+                self.logger.error("No more IPs available")
                 return None
 
         except Exception as e:
-            self.logger.error(f"Error during protected navigation to {url}: {e}")
-            # Re-raise to let @retry handle it
+            self.logger.error(f"Error during navigation to {url}: {e}")
             raise
 
-    async def is_cloudflare_challenge(self, response: Optional[Any]) -> bool:
-        """Detect if response is a Cloudflare challenge page.
-
-        Uses the official cf-mitigated response header.
-
-        Args:
-            response: HTTP response object from page.goto() or page.request.get()
-
-        Returns:
-            True if challenge detected, False otherwise
-        """
-        try:
-            if not response or not hasattr(response, 'headers'):
-                self.logger.debug("No response object available for challenge detection")
-                return False
-
-            # Check cf-mitigated header (official Cloudflare method)
-            cf_mitigated = response.headers.get('cf-mitigated')
-
-            if cf_mitigated == 'challenge':
-                self.logger.debug("Cloudflare challenge detected via cf-mitigated header")
-                return True
-
-            self.logger.debug(f"No challenge detected (cf-mitigated={cf_mitigated})")
-            return False
-
-        except Exception as e:
-            self.logger.warning(f"Error detecting challenge: {e}")
-            return False
-
     async def solve_cloudflare_challenge(self, page: Page, url: str) -> bool:
-        """Solve Cloudflare challenge using camoufox-captcha library."""
+        """Solve Cloudflare challenge using camoufox-captcha library with optimal settings."""
         try:
             self.logger.info(f"Attempting to solve Cloudflare challenge for {url}...")
 
-            # Use camoufox-captcha to automatically solve the challenge
-            # Use max_retries from config for solve_attempts
+            # Use camoufox-captcha with optimal settings for Cloudflare
+            # Optimized parameters based on camoufox-captcha best practices:
+            # - CRITICAL: solve_click_delay must be 8-10s to allow Cloudflare verification to complete
+            # - Longer delays = more human-like behavior and allow backend verification
+            # - More wait attempts = better for slow-loading challenges
             success = await solve_captcha(
                 page,
                 captcha_type='cloudflare',
                 challenge_type='interstitial',
-                solve_attempts=self.config.max_retries,
-                solve_click_delay=self.config.retry_delay
+                method='click',  # Explicit method for clarity
+                solve_attempts=max(self.config.max_retries, 5),  # At least 5 attempts
+                solve_click_delay=10.0,  # CRITICAL: 10s wait after click for Cloudflare verification
+                wait_checkbox_attempts=10,  # Increased from default 5 for slow challenges
+                wait_checkbox_delay=3.0,  # Increased from default 1s for better reliability
+                checkbox_click_attempts=3,  # Default is good
+                attempt_delay=5  # Delay between solve attempts
             )
 
             if success:
                 self.logger.info("Successfully solved Cloudflare challenge!")
+
+                # CRITICAL: Additional wait after solve to ensure cookies are fully set
+                # Cloudflare may still be processing verification in background
+                self.logger.debug("Waiting additional 3 seconds for cookie propagation...")
+                await asyncio.sleep(3)
 
                 # Extract and save cookies if we have session manager
                 if self.session_manager:
                     cookies = await self._extract_cookies(page)
                     if cookies:
                         self.session_manager.set_cookies(cookies)
+                        self.logger.debug(f"Saved {len(cookies)} cookies from successful challenge solve")
 
                 return True
             else:
@@ -444,11 +517,8 @@ class BrowserManager:
             for cookie in cookie_list:
                 cookies[cookie['name']] = cookie['value']
 
-            # Log all cookies first for debugging
-            self.logger.debug(f"All available cookies: {list(cookies.keys())}")
-
-
-            self.logger.debug(f"Extracted {len(cookies)} Cloudflare cookies: {list(cookies.keys())}")
+            # Log all cookies for debugging
+            self.logger.debug(f"Extracted {len(cookies)} total cookies: {list(cookies.keys())}")
             return cookies
         except Exception as e:
             self.logger.error(f"Error extracting cookies: {e}")
