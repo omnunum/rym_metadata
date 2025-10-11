@@ -196,10 +196,11 @@ class RYMScraper:
         # Rate limiting (scraper timing behavior)
         await self._wait_for_rate_limit()
 
-        # Delegate everything to browser
-        result = await self.browser_manager.navigate_with_protection(
-            page, url, response_type=response_type
-        )
+        # Delegate to appropriate fetch method based on response type
+        if response_type == 'json':
+            result = await self.browser_manager.fetch_ajax_json(page, url)
+        else:  # 'html'
+            result = await self.browser_manager.fetch_html(page, url)
 
         # Update scraper timing for rate limiting
         self._update_request_time()
@@ -616,14 +617,12 @@ class RYMScraper:
             self.logger.info(f"Making POST request to FilterDiscography for artist_id={artist_id}, album='{album}'")
             self.logger.debug(f"Form data: {form_data}")
 
-            # Use navigate_with_protection for POST request
+            # Use fetch_ajax_post for POST request
             # This handles challenges, 503 errors, and IP rotation automatically
-            response_text = await self.browser_manager.navigate_with_protection(
+            response_text = await self.browser_manager.fetch_ajax_post(
                 page,
                 f'{BASE_URL}/httprequest/FilterDiscography',
-                response_type='json',
-                method='POST',
-                form_data=form_data
+                form_data
             )
 
             if not response_text:
@@ -763,7 +762,7 @@ class RYMScraper:
             if not artist_id:
                 # Navigate to the artist page to extract artist_id
                 await self._wait_for_rate_limit()
-                success = await self.browser_manager.navigate_with_protection(
+                success = await self.browser_manager.fetch_html(
                     page, artist_page_url
                 )
                 if not success:
@@ -1125,14 +1124,10 @@ class RYMScraper:
             await self._wait_for_rate_limit()
             url = f"{BASE_URL}/genres"
             self.logger.info(f"Fetching genre hierarchy from {url}")
-            success = await self.browser_manager.navigate_with_protection(
-                page, url
-            )
-            if not success:
+            html = await self.browser_manager.fetch_html(page, url)
+            if not html:
                 self.logger.error("Failed to navigate to genres page")
                 return None
-
-            html = await page.content()
             if not html or len(html) < 1000:
                 self.logger.warning("Genre hierarchy page content too short or empty")
                 return None

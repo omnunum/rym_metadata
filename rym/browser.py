@@ -303,6 +303,231 @@ class BrowserManager:
             self.logger.info("Challenge solved, waiting 5s to avoid rate limits...")
             await asyncio.sleep(5)
 
+    @staticmethod
+    def _with_protection(response_type: str = 'html'):
+        """Decorator factory that adds retry, challenge handling, and IP rotation to request methods.
+
+        Args:
+            response_type: 'html', 'json', or 'raw' - determines challenge solving strategy
+                          'html' - page.goto() requests, solve on current page
+                          'json' - AJAX GET requests, solve on homepage, parse as JSON
+                          'raw' - AJAX POST requests, solve on homepage, return raw text
+
+        Returns:
+            Decorator function that wraps request methods with protection logic
+        """
+        def decorator(request_func):
+            @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=30))
+            async def wrapper(self, page: Page, url: str, *args, **kwargs):
+                try:
+                    # Execute the actual request function
+                    response, content = await request_func(self, page, url, *args, **kwargs)
+
+                    # Check for challenge
+                    if self._is_challenge(response, content):
+                        self.logger.info(f"Challenge detected for {url}")
+
+                        if response_type == 'html':
+                            # HTML: page.goto() already navigated to challenge page
+                            await self._solve_challenge_on_current_page(page, url)
+                        else:  # 'json' or 'raw' (AJAX requests)
+                            # AJAX: solve on homepage (can't solve on JSON/raw text response)
+                            # Cloudflare cookies are domain-wide, so homepage solve works for all endpoints
+                            await self._solve_challenge_on_homepage(page)
+
+                        # After solving, retry this request
+                        raise Exception("Challenge solved, retrying request")
+
+                    # Check status code
+                    if response.status == 503:
+                        raise ServerOverloadError(503, f"503 error from {url}")
+                    elif response.status >= 400:
+                        self.logger.warning(f"Request failed with status {response.status}")
+                        return None
+
+                    # Success - return content
+                    return content
+
+                except ServerOverloadError:
+                    # Handle IP rotation
+                    request_timestamp = time.time()
+                    if await self._handle_server_overload_rotation(page, request_timestamp):
+                        self.logger.info("IP rotated, retrying request")
+                        raise  # Let @retry decorator handle the retry
+                    else:
+                        self.logger.error("No more IPs available")
+                        return None
+
+                except Exception as e:
+                    self.logger.error(f"Error during request to {url}: {e}")
+                    raise
+
+            return wrapper
+        return decorator
+
+    def _create_mock_response(self, fetch_result: dict):
+        """Create mock response object from page.evaluate fetch result.
+
+        Args:
+            fetch_result: Dict with 'status', 'headers', and 'text' keys
+
+        Returns:
+            MockResponse object with async text() and json() methods
+        """
+        class MockResponse:
+            def __init__(self, data):
+                self.status = data['status']
+                self.headers = data.get('headers', {})
+                self._text = data['text']
+
+            async def text(self):
+                return self._text
+
+            async def json(self):
+                import json
+                return json.loads(self._text)
+
+        return MockResponse(fetch_result)
+
+    @_with_protection(response_type='html')
+    async def fetch_html(self, page: Page, url: str) -> Optional[str]:
+        """Fetch HTML page with automatic challenge handling and IP rotation.
+
+        Uses page.goto() for navigation. Handles Cloudflare challenges by solving
+        on the current page, then retrying the request.
+
+        Args:
+            page: Playwright page instance
+            url: Target URL to fetch
+
+        Returns:
+            HTML content as string, or None if request failed
+        """
+        self.logger.debug(f"Navigating to {url}")
+
+        # Make request
+        response = await page.goto(url, wait_until='commit', timeout=10000)
+
+        # Wait for DOM
+        await page.wait_for_load_state('domcontentloaded', timeout=15000)
+
+        # Get content
+        html_content = await page.content()
+        if self.session_manager:
+            self.session_manager.increment_request_count()
+        self.logger.debug(f"Received HTML content: {len(html_content)} bytes")
+
+        # Return (response, content) tuple for decorator
+        return response, html_content
+
+    @_with_protection(response_type='json')
+    async def fetch_ajax_json(self, page: Page, url: str) -> Optional[dict]:
+        """Fetch JSON via AJAX GET with automatic challenge handling and IP rotation.
+
+        Uses page.evaluate() with fetch() to make request from browser context.
+        This ensures all cookies, headers, and browser fingerprints are included.
+
+        Args:
+            page: Playwright page instance
+            url: Target URL to fetch
+
+        Returns:
+            Parsed JSON dict, or None if request failed
+        """
+        self.logger.debug(f"Making AJAX GET to {url}")
+
+        # Make AJAX GET request from page context
+        fetch_result = await page.evaluate("""
+            async (url) => {
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'accept': '*/*',
+                        'referer': 'https://rateyourmusic.com/genres/'
+                    },
+                    credentials: 'include'
+                });
+
+                const text = await response.text();
+                const headers = {};
+                response.headers.forEach((value, key) => {
+                    headers[key] = value;
+                });
+
+                return {
+                    status: response.status,
+                    headers: headers,
+                    text: text
+                };
+            }
+        """, url)
+
+        # Create response wrapper
+        response = self._create_mock_response(fetch_result)
+
+        # Parse JSON
+        json_data = await response.json()
+
+        # Return (response, content) tuple for decorator
+        return response, json_data
+
+    @_with_protection(response_type='raw')
+    async def fetch_ajax_post(self, page: Page, url: str, form_data: Dict[str, str]) -> Optional[str]:
+        """Fetch via AJAX POST with automatic challenge handling and IP rotation.
+
+        Uses page.evaluate() with fetch() and FormData to make multipart/form-data POST
+        request from browser context. Returns raw response text for caller to parse.
+
+        Args:
+            page: Playwright page instance
+            url: Target URL to post to
+            form_data: Dictionary of form field names and values
+
+        Returns:
+            Raw response text (e.g., JavaScript callback format), or None if request failed
+        """
+        self.logger.debug(f"Making AJAX POST to {url}")
+
+        # Make AJAX POST request from page context
+        fetch_result = await page.evaluate("""
+            async (data) => {
+                const formData = new FormData();
+                for (const [key, value] of Object.entries(data.formData)) {
+                    formData.append(key, value);
+                }
+
+                const response = await fetch(data.url, {
+                    method: 'POST',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: formData,
+                    credentials: 'include'
+                });
+
+                const text = await response.text();
+                const headers = {};
+                response.headers.forEach((value, key) => {
+                    headers[key] = value;
+                });
+
+                return {
+                    status: response.status,
+                    headers: headers,
+                    text: text
+                };
+            }
+        """, {'url': url, 'formData': form_data})
+
+        # Create response wrapper
+        response = self._create_mock_response(fetch_result)
+
+        # Get raw text (caller handles parsing, e.g., JavaScript callback format)
+        raw_text = await response.text()
+
+        # Return (response, content) tuple for decorator
+        return response, raw_text
+
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=30))
     async def navigate_with_protection(self, page: Page, url: str, response_type: str = 'html', method: str = 'GET', form_data: Optional[Dict[str, str]] = None) -> Optional[Any]:
         """Simplified navigation with automatic Cloudflare challenge handling.
