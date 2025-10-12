@@ -311,7 +311,7 @@ class BrowserManager:
             Decorator function that wraps request methods with protection logic
         """
         def decorator(request_func):
-            @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=30))
+            @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
             async def wrapper(self, page: Page, url: str, *args, **kwargs):
                 try:
                     # Execute the actual request function

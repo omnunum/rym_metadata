@@ -485,6 +485,53 @@ class RYMScraper:
             self.logger.error(f"Error extracting artist ID from HTML: {e}")
             return None
 
+    def _extract_artist_key_from_html(self, html: str) -> Optional[str]:
+        """Extract artist_key from artist page HTML.
+
+        The artist_key is a security token required for ExpandDiscographySection requests.
+        It's typically found in JavaScript variables or hidden form inputs.
+
+        Args:
+            html: Full artist page HTML
+
+        Returns:
+            Artist key string (hex), or None if not found
+        """
+        try:
+            # Try pattern 1: JavaScript variable declaration
+            # Example: var artist_key = '9da51d29402afbd91af0cfe435109516';
+            pattern1 = r"var\s+artist_key\s*=\s*['\"]([a-f0-9]+)['\"]"
+            matches = re.findall(pattern1, html, re.IGNORECASE)
+            if matches:
+                artist_key = matches[0]
+                self.logger.debug(f"Extracted artist_key from JavaScript: {artist_key}")
+                return artist_key
+
+            # Try pattern 2: Hidden input field
+            # Example: <input type="hidden" name="artist_key" value="9da51d29402afbd91af0cfe435109516">
+            pattern2 = r'<input[^>]*name=["\']artist_key["\'][^>]*value=["\']([a-f0-9]+)["\'][^>]*>'
+            matches = re.findall(pattern2, html, re.IGNORECASE)
+            if matches:
+                artist_key = matches[0]
+                self.logger.debug(f"Extracted artist_key from input field: {artist_key}")
+                return artist_key
+
+            # Try pattern 3: Data attribute
+            # Example: data-artist-key="9da51d29402afbd91af0cfe435109516"
+            pattern3 = r'data-artist-key=["\']([a-f0-9]+)["\']'
+            matches = re.findall(pattern3, html, re.IGNORECASE)
+            if matches:
+                artist_key = matches[0]
+                self.logger.debug(f"Extracted artist_key from data attribute: {artist_key}")
+                return artist_key
+
+            self.logger.warning("No artist_key found in HTML")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error extracting artist_key from HTML: {e}")
+            return None
+
     async def _get_artist_page_url(self, artist: str, page: Any) -> Optional[str]:
         """Get the artist page URL, trying direct URL first, then artist search."""
         # Try direct artist URL first
@@ -552,6 +599,124 @@ class RYMScraper:
             self.logger.error(f"Error parsing JavaScript callback response: {e}")
             return None
 
+    def _get_collapsed_sections(self, html: str) -> List[str]:
+        """Detect which discography sections have collapsed content that needs expanding.
+
+        Checks each section type to determine if there are more releases that aren't
+        currently visible in the HTML.
+
+        Args:
+            html: Full artist page HTML
+
+        Returns:
+            List of section type codes that need expanding (e.g., ['s', 'i', 'j'])
+        """
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, 'html.parser')
+
+            # Find the main discography div
+            discography_div = soup.find('div', id='discography')
+            if not discography_div:
+                self.logger.debug("No discography div found in HTML")
+                return []
+
+            # Section types to check: s=album, e=ep, i=single, j=dj_mix, a=appears_on, v=va_comp, d=video
+            section_types = ['s', 'e', 'i', 'j', 'a', 'v', 'd']
+            collapsed_sections = []
+
+            for section_type in section_types:
+                # Check if this section exists
+                section_header = discography_div.find('div', id=f'disco_header_{section_type}')
+                if not section_header:
+                    continue
+
+                # Check the disco_type div - if it's empty or very small, section might be collapsed
+                section_div = discography_div.find('div', id=f'disco_type_{section_type}')
+                if not section_div:
+                    # Header exists but no content div = needs expansion
+                    collapsed_sections.append(section_type)
+                    self.logger.debug(f"Section '{section_type}' has header but no content - needs expansion")
+                    continue
+
+                # Check if section div is empty or has minimal content
+                section_html = str(section_div)
+                if len(section_html) < 100:  # Arbitrary threshold for "empty"
+                    collapsed_sections.append(section_type)
+                    self.logger.debug(f"Section '{section_type}' appears empty - needs expansion")
+                    continue
+
+                # Additional check: Look for "Show X more" indicators or similar
+                # (RYM may have UI elements indicating collapsed state)
+                # For now, if we can't find any disco_release elements, consider it collapsed
+                release_elements = section_div.find_all(class_='disco_release')
+                if not release_elements:
+                    collapsed_sections.append(section_type)
+                    self.logger.debug(f"Section '{section_type}' has no visible releases - needs expansion")
+
+            if collapsed_sections:
+                self.logger.info(f"Found {len(collapsed_sections)} collapsed sections: {collapsed_sections}")
+            else:
+                self.logger.debug("No collapsed sections detected")
+
+            return collapsed_sections
+
+        except Exception as e:
+            self.logger.error(f"Error detecting collapsed sections: {e}")
+            return []
+
+    def _parse_visible_discography(self, html: str) -> List[DiscographyCandidate]:
+        """Parse all visible discography releases from artist page HTML.
+
+        Parses releases from all section types (albums, EPs, singles, etc.) that are
+        currently visible in the discography div. Does not expand collapsed sections.
+
+        Args:
+            html: Full artist page HTML
+
+        Returns:
+            List of DiscographyCandidate objects from all visible sections
+        """
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, 'html.parser')
+
+            # Find the main discography div
+            discography_div = soup.find('div', id='discography')
+            if not discography_div:
+                self.logger.debug("No discography div found in HTML")
+                return []
+
+            # Section types to check: s=album, e=ep, i=single, j=dj_mix, a=appears_on, v=va_comp, d=video
+            section_types = ['s', 'e', 'i', 'j', 'a', 'v', 'd']
+            all_candidates = []
+
+            for section_type in section_types:
+                # Find the disco_type div for this section
+                section_div = discography_div.find('div', id=f'disco_type_{section_type}')
+                if not section_div:
+                    continue
+
+                # Parse all disco_release elements in this section
+                # We can reuse the existing _parse_discography_html logic by passing section HTML
+                section_html = str(section_div)
+                candidates = self._parse_discography_html(section_html)
+
+                if candidates:
+                    self.logger.debug(f"Found {len(candidates)} visible releases in section '{section_type}'")
+                    all_candidates.extend(candidates)
+
+            if all_candidates:
+                self.logger.info(f"Parsed {len(all_candidates)} total visible releases from artist page")
+            else:
+                self.logger.debug("No visible releases found in discography")
+
+            return all_candidates
+
+        except Exception as e:
+            self.logger.error(f"Error parsing visible discography: {e}")
+            return []
+
     def _parse_discography_html(self, html: str) -> List[DiscographyCandidate]:
         """Parse discography search results from HTML string (extracted from JavaScript response)."""
         try:
@@ -564,7 +729,7 @@ class RYMScraper:
                 self.logger.debug("No disco_release items found in HTML")
                 return []
 
-            self.logger.info(f"Found {len(release_elements)} releases in discography HTML")
+            self.logger.debug(f"Found {len(release_elements)} releases in discography HTML")
 
             candidates = []
             for i, release_elem in enumerate(release_elements):
@@ -607,6 +772,67 @@ class RYMScraper:
 
         except Exception as e:
             self.logger.error(f"Error parsing discography HTML: {e}")
+            return []
+
+    async def _expand_discography_section(self, page: Any, artist_id: str, section_type: str, artist_key: str) -> List[DiscographyCandidate]:
+        """Expand a collapsed discography section to get all releases.
+
+        Makes a POST request to ExpandDiscographySection endpoint to fetch all releases
+        in a specific section type (albums, EPs, singles, etc.).
+
+        Args:
+            page: Playwright page (for browser context)
+            artist_id: RYM artist ID
+            section_type: Section code ('s', 'e', 'i', 'j', 'a', 'v', 'd')
+            artist_key: Security token from artist page
+
+        Returns:
+            List of DiscographyCandidate objects from expanded section
+        """
+        try:
+            # Prepare form data for ExpandDiscographySection request
+            form_data = {
+                'artist_id': artist_id,
+                'sort': 'release_date.a,title.a',
+                'show_appearances': 'false',
+                'type': section_type,
+                'artist_key': artist_key,
+                'action': 'ExpandDiscographySection',
+                'rym_ajax_req': '1',
+                'request_token': ''
+            }
+
+            self.logger.info(f"Expanding discography section '{section_type}' for artist_id={artist_id}")
+            self.logger.debug(f"Form data: {form_data}")
+
+            # Use fetch_ajax_post for POST request
+            response_text = await self.browser_manager.fetch_ajax_post(
+                page,
+                f'{BASE_URL}/httprequest/ExpandDiscographySection',
+                form_data
+            )
+
+            if not response_text:
+                self.logger.warning(f"ExpandDiscographySection returned empty response for section '{section_type}'")
+                return []
+
+            self.logger.debug(f"ExpandDiscographySection response: {response_text[:200]}...")
+
+            # Parse JavaScript callback response
+            # Format: RYMartistPage._expandDiscographySectionCallback('j', '<html>...')
+            # We can reuse _parse_javascript_callback_response which handles similar format
+            html_content = self._parse_javascript_callback_response(response_text)
+            if not html_content:
+                self.logger.warning(f"Could not extract HTML from ExpandDiscographySection response for section '{section_type}'")
+                return []
+
+            # Parse disco_release elements from expanded HTML
+            candidates = self._parse_discography_html(html_content)
+            self.logger.info(f"Expanded section '{section_type}' found {len(candidates)} releases")
+            return candidates
+
+        except Exception as e:
+            self.logger.error(f"Error expanding discography section '{section_type}': {e}")
             return []
 
     async def _search_discography_via_post(self, page: Any, artist_id: str, album: str) -> List[DiscographyCandidate]:
@@ -655,15 +881,110 @@ class RYMScraper:
             self.logger.error(f"Error in POST discography search: {e}")
             return []
 
+    def _normalize_album_name(self, album_name: str) -> str:
+        """Normalize album name for fuzzy matching.
+
+        Applies text normalization and expands common abbreviations to improve
+        matching between variants like "Vol. 2" vs "Volume 2".
+
+        Args:
+            album_name: Raw album name from RYM or metadata
+
+        Returns:
+            Normalized album name string
+        """
+        # First apply standard text normalization
+        normalized = normalize_text(
+            album_name,
+            remove_accents=True,
+            lowercase=True,
+            remove_punctuation=False  # Keep punctuation for now, we'll handle abbreviations
+        )
+
+        # Expand common abbreviations (case-insensitive)
+        # Based on music industry standards (Music Metadata Style Guide, MusicBrainz, Apple Music)
+        # Organized by frequency/importance
+        abbreviation_map = {
+            # Tier 1: Volume/Numbering (very common)
+            r'\bvol\.?\b': 'volume',
+            r'\bvols\.?\b': 'volumes',
+            r'\bpt\.?\b': 'part',
+            r'\bpts\.?\b': 'parts',
+            r'\bno\.?\b': 'number',
+            r'\bnos\.?\b': 'numbers',
+            r'\bch\.?\b': 'chapter',
+            r'\bchs\.?\b': 'chapters',
+            r'\bep\.?\b': 'episode',  # Note: Not the format "EP"
+
+            # Tier 1: Collaboration (extremely common)
+            r'\bfeat\.?\b': 'featuring',
+            r'\bft\.?\b': 'featuring',  # Common alternative
+            r'\bw/\b': 'with',
+            r'\bvs\.?\b': 'versus',
+            r'\bv\.?\b': 'versus',  # Single letter version
+            r'\b&\b': 'and',
+            r'\bpres\.?\b': 'presents',
+
+            # Tier 2: Edition types (common in reissues)
+            r'\bdeluxe\s+ed\.?\b': 'deluxe edition',
+            r'\bltd\.?\b': 'limited',
+            r'\brmx\.?\b': 'remix',
+            r'\bremaster\b': 'remastered',  # Normalize to past tense
+            r'\banniv\.?\b': 'anniversary',
+            r'\bed\.?\b': 'edition',  # Generic edition
+
+            # Tier 3: Recording context (moderate)
+            r'\bacoustic?\b': 'acoustic',  # Handles both "acoust." and "acoustic"
+            r'\binstr\.?\b': 'instrumental',
+            r'\borig\.?\b': 'original',
+
+            # Tier 4: Format/miscellaneous
+            r'\bost\b': 'original soundtrack',
+            r'\bo\.s\.t\.?\b': 'original soundtrack',
+            r'\bcomp\.?\b': 'compilation',
+            r'\bincl\.?\b': 'including',
+            r'\bexcl\.?\b': 'exclusive',
+            r'\bintl\.?\b': 'international',
+
+            # Classical music (specialized)
+            r'\bop\.?\b': 'opus',
+            r'\borch\.?\b': 'orchestra',
+            r'\bsymph\.?\b': 'symphony',
+        }
+
+        for pattern, replacement in abbreviation_map.items():
+            normalized = re.sub(pattern, replacement, normalized, flags=re.IGNORECASE)
+
+        # Now remove remaining punctuation and normalize spaces
+        normalized = re.sub(r'[^\w\s]', ' ', normalized)
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+        return normalized
+
     def _score_discography_candidate(self, candidate: DiscographyCandidate, target_album: str, target_year: Optional[int] = None) -> float:
-        """Calculate similarity score for discography candidate (album name + year only)."""
+        """Calculate similarity score for discography candidate with improved fuzzy matching.
+
+        Uses text normalization and abbreviation expansion to better match album name
+        variants (e.g., "Vol." vs "Volume"). Adjusts threshold based on year match quality.
+
+        Args:
+            candidate: Discography candidate from RYM
+            target_album: Target album name from metadata
+            target_year: Optional target year for improved matching
+
+        Returns:
+            Similarity score from 0.0 to 1.0
+        """
         def string_similarity(s1: str, s2: str) -> float:
-            """Calculate string similarity using SequenceMatcher."""
+            """Calculate string similarity using SequenceMatcher after normalization."""
             if not s1 or not s2:
                 return 0.0
-            return SequenceMatcher(None, s1.lower().strip(), s2.lower().strip()).ratio()
+            # Normalize both strings before comparison
+            norm_s1 = self._normalize_album_name(s1)
+            norm_s2 = self._normalize_album_name(s2)
+            return SequenceMatcher(None, norm_s1, norm_s2).ratio()
 
-        # Calculate album similarity score
+        # Calculate album similarity score with normalization
         album_score = string_similarity(candidate.album, target_album)
 
         # Year score (if available)
@@ -704,9 +1025,23 @@ class RYMScraper:
         for i, (score, candidate) in enumerate(scored_candidates[:3]):
             self.logger.info(f"Discography match #{i+1}: {candidate.album} ({candidate.year}) Score: {score:.3f} URL: {candidate.url}")
 
-        # Check threshold
+        # Check threshold with year-based adjustment
         best_score, best_candidate = scored_candidates[0]
-        threshold = self.config.matching_threshold
+        base_threshold = self.config.matching_threshold
+
+        # Lower threshold if year matches exactly (more confidence)
+        # Reject if year differs by more than 2 (likely wrong album)
+        threshold = base_threshold
+        if target_year and best_candidate.year:
+            year_diff = abs(best_candidate.year - target_year)
+            if year_diff == 0:
+                # Exact year match - lower threshold to 0.65
+                threshold = min(base_threshold, 0.65)
+                self.logger.debug(f"Year match ({target_year}) - lowered threshold to {threshold:.2f}")
+            elif year_diff > 2:
+                # Year mismatch - reject regardless of album score
+                self.logger.info(f"Year mismatch: target={target_year}, candidate={best_candidate.year} - rejecting despite score {best_score:.3f}")
+                return None
 
         if best_score < threshold:
             self.logger.info(f"Best discography match '{best_candidate.album}' score {best_score:.3f} below threshold {threshold:.3f}")
@@ -750,7 +1085,22 @@ class RYMScraper:
             return None
 
     async def _search_artist_discography(self, artist_page_url: str, album: str, page: Any, year: Optional[int] = None) -> Optional[str]:
-        """Search artist's discography for the album using direct POST request."""
+        """Search artist's discography using cascading strategy with progressive expansion.
+
+        Uses a 3-tier cascading search approach:
+        1. Parse visible discography HTML (fast, no extra requests)
+        2. POST to FilterDiscography API (conservative server-side search)
+        3. Expand collapsed sections one at a time until match found (exhaustive)
+
+        Args:
+            artist_page_url: URL to artist page on RYM
+            album: Target album name to search for
+            page: Playwright page (for browser context)
+            year: Optional album year for better matching
+
+        Returns:
+            Album URL if found, None otherwise
+        """
         self.logger.info(f"Searching discography on artist page: {artist_page_url}")
         self.logger.info(f"Looking for album: '{album}' (year: {year})")
 
@@ -765,15 +1115,16 @@ class RYMScraper:
 
             # Check artist ID cache first
             artist_id = None
+            artist_key = None
+            html = None
+
             if self.cache_manager and artist_name:
                 artist_id = self.cache_manager.lookup_artist_id(artist_name)
 
+            # Navigate to artist page if needed (for artist_id, artist_key, or HTML)
             if not artist_id:
-                # Navigate to the artist page to extract artist_id
                 await self._wait_for_rate_limit()
-                success = await self.browser_manager.fetch_html(
-                    page, artist_page_url
-                )
+                success = await self.browser_manager.fetch_html(page, artist_page_url)
                 if not success:
                     self.logger.warning("Could not navigate to artist page, discography search failed")
                     return None
@@ -784,15 +1135,7 @@ class RYMScraper:
                 except Exception:
                     await asyncio.sleep(2)
 
-                # Debug: Check current page URL and title to ensure we're where we expect
-                current_url = page.url
-                try:
-                    page_title = await page.title()
-                    self.logger.info(f"After navigation - URL: {current_url}, Title: {page_title}")
-                except:
-                    self.logger.info(f"After navigation - URL: {current_url}")
-
-                # Get page HTML to extract artist ID
+                # Get page HTML to extract artist metadata
                 html = await page.content()
                 artist_id = self._extract_artist_id_from_html(html)
 
@@ -804,8 +1147,76 @@ class RYMScraper:
                 if self.cache_manager and artist_name:
                     self.cache_manager.save_artist_id(artist_name, artist_id)
 
-            # Use the extracted discography search method
-            return await self._search_discography_by_artist_id(artist_id, album, page, year)
+                # Extract artist_key for section expansion (Tier 3)
+                artist_key = self._extract_artist_key_from_html(html)
+
+            # ========== TIER 1: Parse Visible Discography (FAST) ==========
+            self.logger.info("Tier 1: Searching visible discography HTML")
+            if html is None:
+                # HTML wasn't loaded yet (artist_id was cached), load it now
+                await self._wait_for_rate_limit()
+                await self.browser_manager.fetch_html(page, artist_page_url)
+                try:
+                    await page.wait_for_load_state('networkidle', timeout=10000)
+                except Exception:
+                    await asyncio.sleep(2)
+                html = await page.content()
+
+            visible_candidates = self._parse_visible_discography(html)
+            if visible_candidates:
+                match_url = self._score_discography_candidates(visible_candidates, album, year)
+                if match_url:
+                    self.logger.info(f"Tier 1 SUCCESS: Found match in visible discography")
+                    return match_url
+            self.logger.info("Tier 1: No match in visible discography")
+
+            # ========== TIER 2: FilterDiscography POST API (CONSERVATIVE) ==========
+            self.logger.info("Tier 2: Trying FilterDiscography POST API")
+            post_candidates = await self._search_discography_via_post(page, artist_id, album)
+            if post_candidates:
+                match_url = self._score_discography_candidates(post_candidates, album, year)
+                if match_url:
+                    self.logger.info(f"Tier 2 SUCCESS: Found match via POST API")
+                    return match_url
+            self.logger.info("Tier 2: No match via POST API")
+
+            # ========== TIER 3: Expand Collapsed Sections (EXHAUSTIVE) ==========
+            self.logger.info("Tier 3: Expanding collapsed sections one at a time")
+
+            # Extract artist_key if not already extracted
+            if not artist_key:
+                artist_key = self._extract_artist_key_from_html(html)
+
+            if not artist_key:
+                self.logger.warning("Could not extract artist_key, cannot expand sections")
+                return None
+
+            # Get list of collapsed sections
+            collapsed_sections = self._get_collapsed_sections(html)
+            if not collapsed_sections:
+                self.logger.info("Tier 3: No collapsed sections to expand")
+                return None
+
+            # Expand and search each section until we find a match
+            for section_type in collapsed_sections:
+                self.logger.info(f"Tier 3: Expanding section '{section_type}'")
+                expanded_candidates = await self._expand_discography_section(
+                    page, artist_id, section_type, artist_key
+                )
+
+                if expanded_candidates:
+                    match_url = self._score_discography_candidates(expanded_candidates, album, year)
+                    if match_url:
+                        self.logger.info(f"Tier 3 SUCCESS: Found match in expanded section '{section_type}'")
+                        return match_url
+                    else:
+                        self.logger.info(f"Tier 3: No match in section '{section_type}', trying next section")
+                else:
+                    self.logger.debug(f"Tier 3: Section '{section_type}' returned no candidates")
+
+            # No match found after exhaustive search
+            self.logger.info("Tier 3: No match found after expanding all collapsed sections")
+            return None
 
         except Exception as e:
             self.logger.error(f"Error during discography search: {e}")

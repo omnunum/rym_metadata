@@ -31,6 +31,7 @@ def normalize_text(text: str, *,
     # Remove parentheticals (e.g., "(2023 remaster)", "(Deluxe Edition)")
     if remove_parentheticals:
         result = re.sub(r'\s*\([^)]*\)\s*', ' ', result)
+        result = re.sub(r'\s*\[[^]]*\]\s*', ' ', result)
         result = re.sub(r'\s+', ' ', result).strip()
 
     # Remove accents using NFD normalization
