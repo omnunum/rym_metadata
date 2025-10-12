@@ -38,7 +38,38 @@ def _deduplicate_list(items: List[str]) -> List[str]:
 
 
 class RYMScraper:
-    """Handles core scraping operations for RYM album data."""
+    """Handles core scraping operations for RYM album data.
+
+    Album Matching Strategy - Two-Phase Normalization:
+
+    When searching for albums on RYM, a two-phase normalization approach is used
+    to handle RYM's substring-based search while maintaining accurate fuzzy matching:
+
+    Phase 1 - Search Query (Aggressive Normalization):
+        Used when querying RYM's search/filter APIs to cast a wide net.
+        Strips album names to core content words by removing:
+        - Articles (the, a, an)
+        - Volume/part/number words (volume, part, featuring, etc.)
+        - All numerals (Arabic and Roman)
+        - Common prepositions (of, for, with, and, etc.)
+
+        Example: "The Alchemy Index, Vol. 3 & 4: Air & Earth" → "alchemy index air earth"
+        Function: _normalize_album_for_search()
+
+    Phase 2 - Match Scoring (Moderate Normalization):
+        Used when scoring candidate matches from search results for accuracy.
+        Applies semantic normalization:
+        - Expands abbreviations (vol → volume, ft → featuring)
+        - Converts Arabic numerals to Roman (3 → iii, 4 → iv)
+        - Removes punctuation
+        - Keeps articles and prepositions for accurate similarity scoring
+
+        Example: "vol 3 & 4" → "volume iii and iv"
+        Function: _normalize_album_name()
+
+    This two-phase approach significantly improves match rates for albums with
+    volume numbers, Roman numerals, and verbose titles.
+    """
 
     def __init__(self, config: Any, cache_manager: Optional[ContentCacheManager] = None,
                  browser_manager: Optional[BrowserManager] = None) -> None:
@@ -838,18 +869,22 @@ class RYMScraper:
     async def _search_discography_via_post(self, page: Any, artist_id: str, album: str) -> List[DiscographyCandidate]:
         """Search discography using direct POST request to FilterDiscography endpoint."""
         try:
+            # Use aggressive normalization (Phase 1) for search query to avoid RYM's substring search issues
+            # The returned candidates will be scored using moderate normalization (Phase 2)
+            normalized_search = self._normalize_album_for_search(album)
+
             # Prepare form data for the POST request
             form_data = {
                 'artist_id': artist_id,
                 'sort': 'release_date.a,title.a',
-                'searchterm': album,
+                'searchterm': normalized_search,
                 'show_appearances': 'true',
                 'action': 'FilterDiscography',
                 'rym_ajax_req': '1',
                 'request_token': ''
             }
 
-            self.logger.info(f"Making POST request to FilterDiscography for artist_id={artist_id}, album='{album}'")
+            self.logger.info(f"Making POST request to FilterDiscography for artist_id={artist_id}, album='{album}' (normalized: '{normalized_search}')")
             self.logger.debug(f"Form data: {form_data}")
 
             # Use fetch_ajax_post for POST request
@@ -881,8 +916,39 @@ class RYMScraper:
             self.logger.error(f"Error in POST discography search: {e}")
             return []
 
+    def _convert_arabic_to_roman(self, text: str) -> str:
+        """Convert Arabic numerals to lowercase Roman numerals for better matching.
+
+        Converts standalone Arabic numerals (1-20) to their Roman numeral equivalents
+        to improve matching with RYM titles that use Roman numerals.
+
+        Args:
+            text: Text containing Arabic numerals
+
+        Returns:
+            Text with Arabic numerals converted to Roman numerals
+        """
+        arabic_to_roman = {
+            '1': 'i', '2': 'ii', '3': 'iii', '4': 'iv', '5': 'v',
+            '6': 'vi', '7': 'vii', '8': 'viii', '9': 'ix', '10': 'x',
+            '11': 'xi', '12': 'xii', '13': 'xiii', '14': 'xiv', '15': 'xv',
+            '16': 'xvi', '17': 'xvii', '18': 'xviii', '19': 'xix', '20': 'xx'
+        }
+
+        result = text
+        # Replace in reverse order (20 before 2, 10 before 1) to avoid partial replacements
+        for arabic in sorted(arabic_to_roman.keys(), key=lambda x: -int(x)):
+            roman = arabic_to_roman[arabic]
+            # Replace standalone numbers (word boundaries)
+            result = re.sub(rf'\b{arabic}\b', roman, result)
+
+        return result
+
     def _normalize_album_name(self, album_name: str) -> str:
         """Normalize album name for fuzzy matching.
+
+        **PHASE 2 NORMALIZATION** - Used for scoring matches only.
+        See class docstring for full two-phase strategy explanation.
 
         Applies text normalization and expands common abbreviations to improve
         matching between variants like "Vol. 2" vs "Volume 2".
@@ -955,9 +1021,77 @@ class RYMScraper:
         for pattern, replacement in abbreviation_map.items():
             normalized = re.sub(pattern, replacement, normalized, flags=re.IGNORECASE)
 
+        # Convert Arabic numerals to Roman numerals for better matching with RYM titles
+        normalized = self._convert_arabic_to_roman(normalized)
+
         # Now remove remaining punctuation and normalize spaces
         normalized = re.sub(r'[^\w\s]', ' ', normalized)
         normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+        return normalized
+
+    def _normalize_album_for_search(self, album_name: str) -> str:
+        """Normalize album for RYM search query (aggressive - strips to content words).
+
+        **PHASE 1 NORMALIZATION** - Used for search queries only.
+        See class docstring for full two-phase strategy explanation.
+
+        Removes noise words that confuse RYM's substring search while keeping
+        core identifying words for broader matches. This is used for Phase 1 (search),
+        while _normalize_album_name is used for Phase 2 (scoring matches).
+
+        Args:
+            album_name: Raw album name to normalize for search
+
+        Returns:
+            Aggressively normalized album name with only content words
+        """
+        # First apply text normalization with punctuation removal
+        normalized = normalize_text(
+            album_name,
+            remove_accents=True,
+            lowercase=True,
+            remove_punctuation=True
+        )
+
+        # Remove common noise words patterns that confuse RYM's substring search
+        noise_patterns = [
+            # Articles
+            r'\bthe\b', r'\ba\b', r'\ban\b',
+            # Volume/Part/Number
+            r'\bvolume\b', r'\bvolumes\b',
+            r'\bpart\b', r'\bparts\b',
+            r'\bnumber\b',
+            # Collaboration words
+            r'\bfeaturing\b',
+            r'\bwith\b',
+            r'\bversus\b',
+            # Conjunctions
+            r'\band\b', r'\bor\b',
+            # Edition/Format
+            r'\bedition\b',
+            r'\bdeluxe\b', r'\blimited\b',
+            r'\bremaster(?:ed)?\b',
+            # Prepositions
+            r'\bof\b', r'\bfor\b', r'\bfrom\b', r'\bto\b',
+            r'\bin\b', r'\bon\b', r'\bat\b', r'\bby\b',
+        ]
+
+        for pattern in noise_patterns:
+            normalized = re.sub(pattern, ' ', normalized, flags=re.IGNORECASE)
+
+        # Remove all Arabic numerals
+        normalized = re.sub(r'\b\d+\b', ' ', normalized)
+
+        # Remove Roman numerals (standalone)
+        # Matches valid Roman numerals from I to MMMCMXCIX (3999)
+        roman_pattern = r'\b(?=[MDCLXVI])(M{0,3})(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})\b'
+        normalized = re.sub(roman_pattern, ' ', normalized, flags=re.IGNORECASE)
+
+        # Normalize whitespace
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+        self.logger.debug(f"Search normalization: '{album_name}' -> '{normalized}'")
 
         return normalized
 
@@ -1006,7 +1140,11 @@ class RYMScraper:
 
 
     def _score_discography_candidates(self, candidates: List[DiscographyCandidate], target_album: str, target_year: Optional[int] = None) -> Optional[str]:
-        """Score discography candidates and return the best match URL."""
+        """Score discography candidates and return the best match URL.
+
+        Note: Uses Phase 2 (moderate) normalization via _normalize_album_name()
+        for accurate fuzzy matching. See class docstring for strategy details.
+        """
         if not candidates:
             self.logger.debug("No candidates to score")
             return None
