@@ -5,7 +5,7 @@ that can be used standalone or integrated into other tools like streamrip.
 """
 
 import logging
-import os
+from pathlib import Path
 from typing import Dict, Optional, Any, Literal
 
 from rym.dataclasses import RYMMetadata, RYMConfig
@@ -39,11 +39,11 @@ class RYMMetadataScraper:
         self.cache_manager = None
         if self.config.cache_enabled:
             # Make cache_dir absolute if it's not already
-            cache_dir = self.config.cache_dir
-            if not os.path.isabs(cache_dir):
-                cache_dir = os.path.abspath(cache_dir)
+            cache_dir = Path(self.config.cache_dir)
+            if not cache_dir.is_absolute():
+                cache_dir = cache_dir.resolve()
 
-            self.cache_manager = ContentCacheManager(cache_dir)
+            self.cache_manager = ContentCacheManager(str(cache_dir))
 
     def _init_browser_manager(self) -> None:
         """Initialize browser manager."""
@@ -62,9 +62,9 @@ class RYMMetadataScraper:
         await self.scraper.__aenter__()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
         """Async context manager exit - cleanup browser session."""
-        await self.scraper.__aexit__(exc_type, exc_val, exc_tb)
+        await self.scraper.__aexit__(_exc_type, _exc_val, _exc_tb)
 
 
     async def get_album_metadata(self, artist: str, album: str, year: Optional[int] = None, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> Optional[RYMMetadata]:

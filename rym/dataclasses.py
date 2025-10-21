@@ -1,9 +1,12 @@
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
-@dataclass
+@dataclass(repr=True)
 class RYMConfig:
     """Configuration for standalone RYM scraper."""
+    # Base URL configuration
+    base_url: str = "https://rateyourmusic.com"  # RYM base URL (configurable for testing/mirrors)
+
     # Proxy configuration
     proxy_enabled: bool = False  # Disabled by default for simplicity
     proxy_host: Optional[str] = None
@@ -52,10 +55,16 @@ class RYMConfig:
     expand_parent_genres: bool = True  # Automatically add parent genres to album metadata
     genre_cache_expiry_days: int = 30  # How long to cache genre hierarchy data (0 = never expire)
 
+    # Direct file tagging (for beets plugin)
+    write_tags_to_files: bool = False  # Write genres/descriptors directly to audio files using mutagen
+
     @classmethod
     def from_beets_config(cls, config) -> 'RYMConfig':
         """Create RYMConfig from beets configuration object."""
         return cls(
+            # Base URL configuration
+            base_url=config['base_url'].get("https://rateyourmusic.com"),
+
             # Proxy configuration
             proxy_enabled=config['proxy_enabled'].get(),
             proxy_host=config['proxy_host'].get(),
@@ -103,6 +112,9 @@ class RYMConfig:
             # Genre expansion
             expand_parent_genres=config['expand_parent_genres'].get(True),
             genre_cache_expiry_days=config['genre_cache_expiry_days'].get(30),
+
+            # Direct file tagging
+            write_tags_to_files=config['write_tags_to_files'].get(False),
         )
 
     @property
@@ -133,7 +145,7 @@ class RYMConfig:
         return self.proxy_host is not None and self.proxy_port is not None
 
 
-@dataclass
+@dataclass(repr=True)
 class RYMMetadata:
     """Container for RYM metadata (artist or album)."""
     artist: str
@@ -144,7 +156,7 @@ class RYMMetadata:
     album_type: Optional[str] = None  # "album", "single", "ep", "compilation"
 
 
-@dataclass
+@dataclass(repr=True)
 class DiscographyCandidate:
     """Container for discography search candidate."""
     album: str
@@ -152,7 +164,7 @@ class DiscographyCandidate:
     url: str
 
 
-@dataclass
+@dataclass(repr=True)
 class SessionState:
     """Session state for proxy management and cookies."""
     current_port: int

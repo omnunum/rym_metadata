@@ -1,12 +1,13 @@
 # RYM Metadata Scraper
 
-A flexible RateYourMusic metadata scraper that can be used as a beets plugin or standalone library. Scrapes genre and descriptor information using Camoufox browser automation with proxy support for Cloudflare bypass.
+A flexible RateYourMusic metadata scraper that can be used as a beets plugin, standalone library, or CLI tool. Scrapes genre and descriptor information using Camoufox browser automation with proxy support for Cloudflare bypass.
 
-## Dual Usage
+## Usage Modes
 
-This package supports two usage patterns:
-1. **Beets Plugin**: Integrates with beets music library management
-2. **Standalone Library**: Can be imported into other tools (like streamrip forks)
+This package supports three usage patterns:
+1. **CLI Tool**: Standalone command-line tool for tagging audio files in folders
+2. **Beets Plugin**: Integrates with beets music library management
+3. **Standalone Library**: Can be imported into other tools (like streamrip forks)
 
 ## Installation
 
@@ -17,7 +18,80 @@ pip install -e .
 
 ## Usage Patterns
 
-### 1. Standalone Library (for streamrip, etc.)
+### 1. CLI Tool
+
+The `rym-tag` command-line tool allows you to tag audio files in a folder with RYM metadata.
+
+#### Basic Usage
+
+```bash
+# Tag all audio files in a folder (recursively)
+rym-tag /path/to/music/folder
+
+# Dry run to see what would be tagged
+rym-tag /path/to/music/folder --dry-run
+
+# Force re-tagging of already processed files
+rym-tag /path/to/music/folder --force
+
+# Non-recursive (only files in the specified folder)
+rym-tag /path/to/music/folder --no-recursive
+
+# Clear cache
+rym-tag --clear-cache
+
+# Show cache information
+rym-tag --cache-info
+```
+
+#### How It Works
+
+1. Scans folder for audio files (FLAC, MP3, M4A, OGG, Opus, etc.)
+2. Groups files by album (using artist + album tags from files)
+3. Fetches RYM metadata for each album
+4. Writes genres and descriptors to audio file tags
+5. Marks files as processed (by writing DESCRIPTOR tag)
+6. Skips already-processed files on subsequent runs (unless `--force`)
+
+#### Proxy Configuration
+
+Set proxy credentials via environment variables or command-line arguments:
+
+```bash
+# Using environment variables
+export PROXY_HOST=proxy.example.com
+export PROXY_PORT=8080
+export PROXY_USERNAME=your_username
+export PROXY_PASSWORD=your_password
+rym-tag /path/to/music
+
+# Using command-line arguments
+rym-tag /path/to/music --proxy-host proxy.example.com --proxy-port 8080 \
+  --proxy-username your_username --proxy-password your_password
+
+# Disable proxy (not recommended for RYM)
+rym-tag /path/to/music --no-proxy
+```
+
+#### Tag Format
+
+The CLI writes the following tags to audio files:
+
+- **GENRE** / **TCON**: Genre list (e.g., "Electronic", "Techno", "Acid")
+- **DESCRIPTOR** / **TXXX:DESCRIPTOR**: Descriptor list (e.g., "hypnotic", "energetic") - only if descriptors found
+- **RYM_URL** / **TXXX:RYM_URL**: RateYourMusic URL for the album or artist
+
+The RYM_URL tag is **always written** to mark files as processed and provide a reference link. This allows the tool to skip already-tagged files on subsequent runs.
+
+#### Supported Audio Formats
+
+- FLAC (Vorbis Comments)
+- MP3 (ID3v2)
+- M4A/MP4 (MP4 atoms)
+- OGG Vorbis
+- Opus
+
+### 2. Standalone Library (for streamrip, etc.)
 
 The standalone API is designed to be imported into any Python application without requiring beets.
 
@@ -178,7 +252,7 @@ async def safe_lookup(artist, album, year=None):
         return None
 ```
 
-### 2. Beets Plugin
+### 3. Beets Plugin
 
 Add to beets config (`~/.config/beets/config.yaml`):
 ```yaml
@@ -199,7 +273,35 @@ rym:
   cache_enabled: true
   auto_tag: false
   matching_threshold: 0.8
+
+  # NEW: Write tags directly to audio files (enables descriptors in files)
+  write_tags_to_files: false  # Set to true to write genres/descriptors directly to audio files
 ```
+
+#### Writing Tags to Files
+
+By default, the beets plugin stores metadata in the beets database:
+- **Genres**: Written to both database AND audio files (beets native support)
+- **Descriptors**: Written to database ONLY (beets doesn't support custom tags)
+
+**Enable `write_tags_to_files`** to write both genres and descriptors directly to audio files using mutagen:
+
+```yaml
+rym:
+  write_tags_to_files: true  # Enables direct file tagging
+  # ... other settings
+```
+
+When enabled:
+- Genres are written to the `GENRE`/`TCON` tag
+- Descriptors are written to the `DESCRIPTOR` tag (custom field)
+- Works with FLAC, MP3, M4A, OGG, Opus
+- Descriptors are now preserved in the actual audio files
+
+This is useful if you want to:
+- Keep descriptors when moving files outside of beets
+- Use descriptors in other music players/tools
+- Have complete metadata embedded in files
 
 ## Proxy Rotation Methods
 

@@ -9,6 +9,11 @@ setup(
     author='RYM Metadata',
     packages=find_packages(),
     py_modules=['beetsplug_rym_camoufox'],
+    entry_points={
+        'console_scripts': [
+            'rym-tag=rym.cli:main',
+        ],
+    },
     install_requires=[
         # Core dependencies
         'aiohttp>=3.8.0',
@@ -24,6 +29,9 @@ setup(
 
         # Retry and resilience
         'tenacity>=8.0.0',
+
+        # Audio file tagging
+        'mutagen>=1.45.0',
 
         # Optional: beets for plugin functionality
         'beets>=1.6.0',

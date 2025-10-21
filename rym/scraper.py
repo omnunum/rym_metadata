@@ -21,8 +21,6 @@ from .browser import BrowserManager
 from .text_utils import normalize_text
 from .genre_manager import GenreHierarchyManager
 
-BASE_URL = "https://rateyourmusic.com"
-
 
 def _deduplicate_list(items: List[str]) -> List[str]:
     """Remove duplicates while preserving order."""
@@ -108,10 +106,8 @@ class RYMScraper:
 
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
         """Async context manager exit - cleanup browser session."""
-        # Standard context manager parameters (unused but required by protocol)
-        del exc_type, exc_val, exc_tb  # Explicitly mark as intentionally unused
         await self._cleanup_browser_session()
 
     async def _start_browser_session(self) -> None:
@@ -411,12 +407,19 @@ class RYMScraper:
             artist = getattr(album_obj, 'albumartist', '') or getattr(album_obj, 'artist', '')
             album_name = getattr(album_obj, 'album', '')
             year = getattr(album_obj, 'year', None)
+            album_type = getattr(album_obj, 'albumtype', 'album')
 
             # Get genre data for album, with artist fallback
             result = await self.get_album_genres_and_descriptors(artist, album_name, year)
-            if not result:
+            rym_url = None
+            if result:
+                # Build URL for album
+                rym_url = self.build_direct_url(artist, album_name, album_type)
+            else:
                 # Fall back to artist genres if album search fails
                 result = await self.get_artist_genres_and_descriptors(artist)
+                if result:
+                    rym_url = self.build_artist_url(artist)
 
             if not result:
                 return None
@@ -432,7 +435,7 @@ class RYMScraper:
                 if hasattr(album_obj, 'store'):
                     album_obj.store()
 
-            return album_obj, {'genres': genres, 'descriptors': descriptors}
+            return album_obj, {'genres': genres, 'descriptors': descriptors, 'url': rym_url}
 
         except Exception as e:
             artist = getattr(album_obj, 'albumartist', 'Unknown')
@@ -472,7 +475,7 @@ class RYMScraper:
         ).replace(' ', '-')
 
         # Use HTTP since HTTPS has proxy issues
-        return f"{BASE_URL}/release/{rym_type}/{artist_clean}/{album_clean}/"
+        return f"{self.config.base_url}/release/{rym_type}/{artist_clean}/{album_clean}/"
 
 
     def build_artist_url(self, artist: str) -> str:
@@ -486,7 +489,7 @@ class RYMScraper:
             remove_punctuation=True
         ).replace(' ', '-')
 
-        return f"{BASE_URL}/artist/{artist_clean}"
+        return f"{self.config.base_url}/artist/{artist_clean}"
 
     def build_artist_search_url(self, artist: str) -> str:
         """Build RYM search URL for the given artist."""
@@ -495,7 +498,7 @@ class RYMScraper:
         # Normalize multiple spaces to single spaces
         artist_clean = re.sub(r'\s+', ' ', artist_clean)
         encoded_query = quote(artist_clean)
-        return f"{BASE_URL}/search?searchtype=a&searchterm={encoded_query}"
+        return f"{self.config.base_url}/search?searchtype=a&searchterm={encoded_query}"
 
     def _extract_artist_id_from_html(self, html: str) -> Optional[str]:
         """Extract artist ID from rym_shortcut input field in HTML."""
@@ -839,7 +842,7 @@ class RYMScraper:
             # Use fetch_ajax_post for POST request
             response_text = await self.browser_manager.fetch_ajax_post(
                 page,
-                f'{BASE_URL}/httprequest/ExpandDiscographySection',
+                f'{self.config.base_url}/httprequest/ExpandDiscographySection',
                 form_data
             )
 
@@ -891,7 +894,7 @@ class RYMScraper:
             # This handles challenges, 503 errors, and IP rotation automatically
             response_text = await self.browser_manager.fetch_ajax_post(
                 page,
-                f'{BASE_URL}/httprequest/FilterDiscography',
+                f'{self.config.base_url}/httprequest/FilterDiscography',
                 form_data
             )
 
@@ -1190,7 +1193,7 @@ class RYMScraper:
         # Return full URL
         url = best_candidate.url
         if url.startswith('/'):
-            return f"{BASE_URL}{url}"
+            return f"{self.config.base_url}{url}"
         return url
 
     async def _search_discography_by_artist_id(self, artist_id: str, album: str, page: Any, year: Optional[int] = None) -> Optional[str]:
@@ -1498,7 +1501,7 @@ class RYMScraper:
                 if normalized_link_text == normalized_artist:
                     self.logger.info(f"Found exact artist match: '{link_text}' matches '{artist}'")
                     relative_url = link['href']
-                    return f"{BASE_URL}{relative_url}"
+                    return f"{self.config.base_url}{relative_url}"
 
             # No exact match found
             self.logger.info(f"No exact match found for artist '{artist}' in search results")
@@ -1572,7 +1575,7 @@ class RYMScraper:
 
     async def _fetch_single_genre_data(self, page: Any, genre_id: str) -> Optional[Dict[str, Any]]:
         """Fetch hierarchy data for a single genre ID from the API."""
-        api_url = f"{BASE_URL}/api/1/genre/hierarchy/{genre_id}/"
+        api_url = f"{self.config.base_url}/api/1/genre/hierarchy/{genre_id}/"
 
         try:
             # Use the robust navigate_page_with_rate_limiting method with JSON response type
@@ -1680,7 +1683,7 @@ class RYMScraper:
         try:
             # Step 1: Fetch the genres page
             await self._wait_for_rate_limit()
-            url = f"{BASE_URL}/genres"
+            url = f"{self.config.base_url}/genres"
             self.logger.info(f"Fetching genre hierarchy from {url}")
             html = await self.browser_manager.fetch_html(page, url)
             if not html:
