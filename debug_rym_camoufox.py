@@ -24,9 +24,9 @@ async def debug_album_async():
     )
 
     # Test with a well-known album
-    artist = "X Club."
-    album = "Stay With Me"
-    year = 2025
+    artist = "Acemo"
+    album = "Unreleased Trax Volume 2"
+    year = 2023
 
     try:
         # Use the API with proxy-aware configuration

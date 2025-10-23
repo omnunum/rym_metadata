@@ -18,7 +18,7 @@ class TestRYMScraper:
             max_retries=3,
             retry_delay=1,
             page_timeout=30000,
-            matching_threshold=0.8,
+            matching_threshold=0.85,
             # Disable rate limiting for tests
             min_request_interval=0.0,
             humanize_request_interval=False

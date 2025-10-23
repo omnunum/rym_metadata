@@ -75,7 +75,10 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
             'resource_blocking_enabled': True,  # Enable targeted resource blocking (blocks e.snmc.io and asset paths)
 
             # Search matching settings
-            'matching_threshold': 0.8,  # Minimum similarity score (0.0-1.0) for accepting matches
+            'matching_threshold': 0.85,  # Minimum similarity score (0.0-1.0) for accepting matches
+
+            # Direct file tagging
+            'write_tags_to_files': False,  # Write genres/descriptors directly to audio files using mutagen
         })
 
         # Create unified configuration
@@ -229,6 +232,17 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
                             album_obj, genre_data = result
                             genres = genre_data.get('genres', [])
                             descriptors = genre_data.get('descriptors', [])
+                            rym_url = genre_data.get('url')
+
+                            # Write tags directly to audio files if configured
+                            if self.rym_config.write_tags_to_files and not dry_run and (genres or descriptors):
+                                from rym.tagger import write_rym_metadata
+                                files_tagged = 0
+                                for item in album_obj.items():
+                                    if write_rym_metadata(item.path, genres, descriptors, rym_url):
+                                        files_tagged += 1
+                                if files_tagged > 0:
+                                    self._log.debug(f"Wrote RYM tags to {files_tagged} file(s)")
 
                             output_parts = []
                             if genres:

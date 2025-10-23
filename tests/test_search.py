@@ -18,7 +18,7 @@ class TestRYMSearchEngine:
         """Create mock config for scraper."""
         from rym.dataclasses import RYMConfig
         return RYMConfig(
-            matching_threshold=0.8,
+            matching_threshold=0.85,
             max_retries=3,
             retry_delay=1.0
         )
@@ -81,7 +81,7 @@ class TestRYMSearchEngine:
         ]
 
         # Mock the config matching threshold
-        scraper.config.matching_threshold = 0.8
+        scraper.config.matching_threshold = 0.85
 
         result = scraper._score_discography_candidates(candidates, "OK Computer", 1997)
         assert result == "https://rateyourmusic.com/release/ok-computer/"

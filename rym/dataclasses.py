@@ -49,7 +49,7 @@ class RYMConfig:
     resource_blocking_enabled: bool = True
 
     # Search matching
-    matching_threshold: float = 0.8  # Minimum similarity score (0.0-1.0) for accepting matches
+    matching_threshold: float = 0.85  # Minimum similarity score (0.0-1.0) for accepting matches
 
     # Genre expansion
     expand_parent_genres: bool = True  # Automatically add parent genres to album metadata
@@ -107,7 +107,7 @@ class RYMConfig:
             resource_blocking_enabled=config['resource_blocking_enabled'].get(True),
 
             # Search matching
-            matching_threshold=config['matching_threshold'].get(0.8),
+            matching_threshold=config['matching_threshold'].get(0.85),
 
             # Genre expansion
             expand_parent_genres=config['expand_parent_genres'].get(True),

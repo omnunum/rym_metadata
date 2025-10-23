@@ -235,7 +235,7 @@ config = RYMConfig(
     resource_blocking_enabled=True,         # Block images/CSS for speed
 
     # Search matching
-    matching_threshold=0.8                  # Minimum similarity score (0.0-1.0) for accepting matches
+    matching_threshold=0.85                  # Minimum similarity score (0.0-1.0) for accepting matches
 )
 ```
 
@@ -272,7 +272,7 @@ rym:
   page_timeout: 30000
   cache_enabled: true
   auto_tag: false
-  matching_threshold: 0.8
+  matching_threshold: 0.85
 
   # NEW: Write tags directly to audio files (enables descriptors in files)
   write_tags_to_files: false  # Set to true to write genres/descriptors directly to audio files
@@ -365,7 +365,7 @@ config = RYMConfig(
 | `cache_dir` | .rym_cache | Cache directory path |
 | `session_state_file_path` | None | Custom path for session state file (defaults to .rym_session_state.json in current directory) |
 | `auto_tag` | false | Automatically tag albums during import |
-| `matching_threshold` | 0.8 | Minimum similarity score (0.0-1.0) for accepting matches |
+| `matching_threshold` | 0.85 | Minimum similarity score (0.0-1.0) for accepting matches |
 
 ## Usage
 
