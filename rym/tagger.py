@@ -217,8 +217,8 @@ def _write_flac_tags(file_path: str, genres: List[str], descriptors: List[str], 
             audio['GENRE'] = genres
 
         if descriptors:
-            # Use custom DESCRIPTOR tag (Vorbis comments allow arbitrary tags)
-            audio['DESCRIPTOR'] = descriptors
+            # Use custom RYM_DESCRIPTOR tag (Vorbis comments allow arbitrary tags)
+            audio['RYM_DESCRIPTOR'] = descriptors
 
         # Always write RYM_URL tag to mark as processed and provide reference
         if rym_url:
@@ -251,7 +251,7 @@ def _write_mp3_tags(file_path: str, genres: List[str], descriptors: List[str], r
 
         if descriptors:
             # ID3v2: Use TXXX frame for custom descriptor field
-            audio.tags.add(TXXX(encoding=3, desc='DESCRIPTOR', text=descriptors))
+            audio.tags.add(TXXX(encoding=3, desc='RYM_DESCRIPTOR', text=descriptors))
 
         # Always write RYM_URL tag to mark as processed and provide reference
         if rym_url:
@@ -276,9 +276,9 @@ def _write_mp4_tags(file_path: str, genres: List[str], descriptors: List[str], r
             audio['\xa9gen'] = genres
 
         if descriptors:
-            # MP4: Use custom ----:com.apple.iTunes:DESCRIPTOR atom
+            # MP4: Use custom ----:com.apple.iTunes:RYM_DESCRIPTOR atom
             # MP4 freeform atoms need bytes
-            audio['----:com.apple.iTunes:DESCRIPTOR'] = [
+            audio['----:com.apple.iTunes:RYM_DESCRIPTOR'] = [
                 desc.encode('utf-8') for desc in descriptors
             ]
 
@@ -304,7 +304,7 @@ def _write_ogg_tags(file_path: str, genres: List[str], descriptors: List[str], r
             audio['GENRE'] = genres
 
         if descriptors:
-            audio['DESCRIPTOR'] = descriptors
+            audio['RYM_DESCRIPTOR'] = descriptors
 
         # Always write RYM_URL tag to mark as processed and provide reference
         if rym_url:
@@ -328,7 +328,7 @@ def _write_opus_tags(file_path: str, genres: List[str], descriptors: List[str], 
             audio['GENRE'] = genres
 
         if descriptors:
-            audio['DESCRIPTOR'] = descriptors
+            audio['RYM_DESCRIPTOR'] = descriptors
 
         # Always write RYM_URL tag to mark as processed and provide reference
         if rym_url:

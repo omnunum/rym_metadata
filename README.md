@@ -78,7 +78,7 @@ rym-tag /path/to/music --no-proxy
 The CLI writes the following tags to audio files:
 
 - **GENRE** / **TCON**: Genre list (e.g., "Electronic", "Techno", "Acid")
-- **DESCRIPTOR** / **TXXX:DESCRIPTOR**: Descriptor list (e.g., "hypnotic", "energetic") - only if descriptors found
+- **RYM_DESCRIPTOR** / **TXXX:RYM_DESCRIPTOR**: Descriptor list (e.g., "hypnotic", "energetic") - only if descriptors found
 - **RYM_URL** / **TXXX:RYM_URL**: RateYourMusic URL for the album or artist
 
 The RYM_URL tag is **always written** to mark files as processed and provide a reference link. This allows the tool to skip already-tagged files on subsequent runs.
