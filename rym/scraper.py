@@ -655,8 +655,8 @@ class RYMScraper:
                 self.logger.debug("No discography div found in HTML")
                 return []
 
-            # Section types to check: s=album, e=ep, i=single, j=dj_mix, a=appears_on, v=va_comp, d=video
-            section_types = ['s', 'e', 'i', 'j', 'a', 'v', 'd']
+            # Section types to check: s=album, e=ep, i=single, c=comp, j=dj_mix, a=appears_on, v=va_comp, d=video
+            section_types = ['s', 'e', 'i', 'c', 'j', 'a', 'v', 'd']
             collapsed_sections = []
 
             for section_type in section_types:
@@ -721,8 +721,8 @@ class RYMScraper:
                 self.logger.debug("No discography div found in HTML")
                 return []
 
-            # Section types to check: s=album, e=ep, i=single, j=dj_mix, a=appears_on, v=va_comp, d=video
-            section_types = ['s', 'e', 'i', 'j', 'a', 'v', 'd']
+            # Section types to check: s=album, e=ep, i=single, c=comp, j=dj_mix, a=appears_on, v=va_comp, d=video
+            section_types = ['s', 'e', 'i', 'c', 'j', 'a', 'v', 'd']
             all_candidates = []
 
             for section_type in section_types:
