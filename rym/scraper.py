@@ -1171,7 +1171,7 @@ class RYMScraper:
         base_threshold = self.config.matching_threshold
 
         # Lower threshold if year matches exactly (more confidence)
-        # Reject if year differs by more than 2 (likely wrong album)
+        # Note: We don't reject based on year differences to allow reissues
         threshold = base_threshold
         if target_year and best_candidate.year:
             year_diff = abs(best_candidate.year - target_year)
@@ -1180,9 +1180,8 @@ class RYMScraper:
                 threshold = min(base_threshold, 0.65)
                 self.logger.debug(f"Year match ({target_year}) - lowered threshold to {threshold:.2f}")
             elif year_diff > 2:
-                # Year mismatch - reject regardless of album score
-                self.logger.info(f"Year mismatch: target={target_year}, candidate={best_candidate.year} - rejecting despite score {best_score:.3f}")
-                return None
+                # Large year difference (possible reissue) - log but don't reject
+                self.logger.info(f"Year difference: target={target_year}, candidate={best_candidate.year} (diff={year_diff}) - possible reissue")
 
         if best_score < threshold:
             self.logger.info(f"Best discography match '{best_candidate.album}' score {best_score:.3f} below threshold {threshold:.3f}")
