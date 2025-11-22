@@ -7,13 +7,14 @@ import string
 import time
 from pathlib import Path
 from typing import Dict, Optional, Any
+from json import JSONDecodeError
 
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError, Response
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 from camoufox_captcha import solve_captcha
 from .session_manager import ProxySessionManager
-from .dataclasses import RYMConfig
+from .dataclasses import RYMConfig, MockResponse
 
 
 class ServerOverloadError(Exception):
@@ -260,12 +261,12 @@ class BrowserManager:
                 self.logger.error("No more ports available")
                 return False
 
-    def _is_challenge(self, response, content: str) -> bool:
+    def _is_challenge(self, response: Response, content: str) -> bool:
         """Simple challenge detection using header and content."""
         # Method 1: Check cf-mitigated header
         if hasattr(response, 'headers') and response.headers.get('cf-mitigated') == 'challenge':
             return True
-
+        
         # Method 2: Check for challenge HTML in content
         if 'Just a moment...' in content and '<title>Just a moment...</title>' in content:
             return True
@@ -278,7 +279,7 @@ class BrowserManager:
         response = await page.goto("https://rateyourmusic.com/", wait_until='domcontentloaded')
         html = await page.content()
 
-        if self._is_challenge(response, html):
+        if response and self._is_challenge(response, html):
             self.logger.info("Challenge detected on homepage, solving...")
             await page.wait_for_load_state('networkidle', timeout=30000)
             if not await self.solve_cloudflare_challenge(page, "https://rateyourmusic.com/"):
@@ -311,12 +312,14 @@ class BrowserManager:
             Decorator function that wraps request methods with protection logic
         """
         def decorator(request_func):
-            @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
+            @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=2, max=30))
             async def wrapper(self, page: Page, url: str, *args, **kwargs):
                 try:
                     # Execute the actual request function
                     response, content = await request_func(self, page, url, *args, **kwargs)
-
+                    # if we failed to process the response correctly grab the raw text
+                    if not content:
+                        content = await response.text()
                     # Check for challenge
                     if self._is_challenge(response, content):
                         self.logger.info(f"Challenge detected for {url}")
@@ -359,32 +362,8 @@ class BrowserManager:
             return wrapper
         return decorator
 
-    def _create_mock_response(self, fetch_result: dict):
-        """Create mock response object from page.evaluate fetch result.
-
-        Args:
-            fetch_result: Dict with 'status', 'headers', and 'text' keys
-
-        Returns:
-            MockResponse object with async text() and json() methods
-        """
-        class MockResponse:
-            def __init__(self, data):
-                self.status = data['status']
-                self.headers = data.get('headers', {})
-                self._text = data['text']
-
-            async def text(self):
-                return self._text
-
-            async def json(self):
-                import json
-                return json.loads(self._text)
-
-        return MockResponse(fetch_result)
-
     @_with_protection(response_type='html')
-    async def fetch_html(self, page: Page, url: str) -> Optional[str]:
+    async def fetch_html(self, page: Page, url: str) -> tuple[Optional[Response], Optional[str]]:
         """Fetch HTML page with automatic challenge handling and IP rotation.
 
         Uses page.goto() for navigation. Handles Cloudflare challenges by solving
@@ -415,7 +394,7 @@ class BrowserManager:
         return response, html_content
 
     @_with_protection(response_type='json')
-    async def fetch_ajax_json(self, page: Page, url: str) -> Optional[dict]:
+    async def fetch_ajax_json(self, page: Page, url: str) -> tuple[MockResponse, Optional[str]]:
         """Fetch JSON via AJAX GET with automatic challenge handling and IP rotation.
 
         Uses page.evaluate() with fetch() to make request from browser context.
@@ -457,16 +436,19 @@ class BrowserManager:
         """, url)
 
         # Create response wrapper
-        response = self._create_mock_response(fetch_result)
+        response = MockResponse(fetch_result)
 
         # Parse JSON
-        json_data = await response.json()
-
+        try:
+            json_data = await response.json()
+        except JSONDecodeError:
+            # Return raw response text and hope correctly retried via response handling
+            json_data = None
         # Return (response, content) tuple for decorator
         return response, json_data
 
     @_with_protection(response_type='raw')
-    async def fetch_ajax_post(self, page: Page, url: str, form_data: Dict[str, str]) -> Optional[str]:
+    async def fetch_ajax_post(self, page: Page, url: str, form_data: Dict[str, str]) -> tuple[MockResponse, Optional[str]]:
         """Fetch via AJAX POST with automatic challenge handling and IP rotation.
 
         Uses page.evaluate() with fetch() and FormData to make multipart/form-data POST
@@ -514,7 +496,7 @@ class BrowserManager:
         """, {'url': url, 'formData': form_data})
 
         # Create response wrapper
-        response = self._create_mock_response(fetch_result)
+        response = MockResponse(fetch_result)
 
         # Get raw text (caller handles parsing, e.g., JavaScript callback format)
         raw_text = await response.text()
@@ -600,21 +582,6 @@ class BrowserManager:
                             };
                         }
                     """, url)
-
-                # Create a mock response object that matches what we expect
-                class MockResponse:
-                    def __init__(self, data):
-                        self.status = data['status']
-                        self.statusText = data['statusText']
-                        self.headers = data['headers']
-                        self._text = data['text']
-
-                    async def text(self):
-                        return self._text
-
-                    async def json(self):
-                        import json
-                        return json.loads(self._text)
 
                 response = MockResponse(fetch_result)
             else:

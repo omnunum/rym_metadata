@@ -199,3 +199,16 @@ class SessionState:
         # Keep legacy port_range format for backward compatibility
         data['port_range'] = {'min': self.port_range_min, 'max': self.port_range_max}
         return data
+    
+class MockResponse:
+    def __init__(self, data: dict[str, Any]):
+        self.status = data['status']
+        self.headers = data.get('headers', {})
+        self._text = data['text']
+
+    async def text(self):
+        return self._text
+
+    async def json(self):
+        import json
+        return json.loads(self._text)
