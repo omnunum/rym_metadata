@@ -24,8 +24,8 @@ async def debug_album_async():
     )
 
     # Test with a well-known album
-    artist = "Acemo"
-    album = "Unreleased Trax Volume 2"
+    artist = "The Desert Sessions"
+    album = "Desert Sessions 7 & 8"
     year = 2023
 
     try:

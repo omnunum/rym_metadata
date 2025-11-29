@@ -1476,7 +1476,10 @@ class RYMScraper:
 
 
     async def _search_artist_url(self, search_url: str, page: Any, artist: str) -> Optional[str]:
-        """Search for artist URL on RYM search page using fuzzy matching."""
+        """Search for artist URL on RYM search page using fuzzy matching.
+
+        Compares against both main artist name and a.k.a alternative names.
+        """
         html = await self.navigate_page_with_rate_limiting(search_url, page)
         if not html:
             return None
@@ -1484,23 +1487,54 @@ class RYMScraper:
         try:
             soup = BeautifulSoup(html, 'html.parser')
 
-            # For artist search, look for results with class="searchpage" that link to artists
-            artist_links = soup.find_all('a', class_='searchpage', href=re.compile(r'/artist/'))
-
-            if not artist_links:
-                self.logger.debug("No artist links found in search results")
+            # Find the Artists section header
+            artists_header = soup.find('h3', string='Artists')
+            if not artists_header:
+                self.logger.debug("No Artists section found in search results")
                 return None
 
             # Look for exact match using normalized text comparison
             normalized_artist = normalize_text(artist, remove_accents=True, lowercase=True)
 
-            for link in artist_links:
-                link_text = link.get_text(strip=True)
-                normalized_link_text = normalize_text(link_text, remove_accents=True, lowercase=True)
-                if normalized_link_text == normalized_artist:
-                    self.logger.info(f"Found exact artist match: '{link_text}' matches '{artist}'")
-                    relative_url = link['href']
-                    return f"{self.config.base_url}{relative_url}"
+            # Iterate through all table siblings following the Artists header
+            for sibling in artists_header.next_siblings:
+                if sibling.name != 'table':
+                    continue
+
+                # Find the artist link in this table
+                link = sibling.find('a', class_='searchpage', href=re.compile(r'/artist/'))
+                if not link:
+                    continue
+
+                # Get main artist name from link text
+                main_name = link.get_text(strip=True)
+                all_names = [main_name]
+
+                # Try to find a.k.a names in the subinfo span within this table
+                try:
+                    subinfo = sibling.find('span', class_='subinfo')
+                    if subinfo:
+                        subinfo_text = subinfo.get_text()
+                        # Extract a.k.a text using regex
+                        aka_match = re.search(r'a\.k\.a:\s*([^\n<]+)', subinfo_text)
+                        if aka_match:
+                            aka_text = aka_match.group(1).strip()
+                            # Split by comma and clean each name
+                            aka_names = [name.strip() for name in aka_text.split(',') if name.strip()]
+                            all_names.extend(aka_names)
+                            self.logger.debug(f"Artist '{main_name}' has a.k.a names: {aka_names}")
+                except Exception as e:
+                    self.logger.debug(f"Could not parse a.k.a names for '{main_name}': {e}")
+                    # Continue with just the main name
+
+                # Compare against all names (main + a.k.a)
+                for name in all_names:
+                    normalized_name = normalize_text(name, remove_accents=True, lowercase=True)
+                    if normalized_name == normalized_artist:
+                        matched_name = name if name != main_name else f"'{main_name}'"
+                        self.logger.info(f"Found exact artist match: {matched_name} matches '{artist}'")
+                        relative_url = link['href']
+                        return f"{self.config.base_url}{relative_url}"
 
             # No exact match found
             self.logger.info(f"No exact match found for artist '{artist}' in search results")
