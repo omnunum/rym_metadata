@@ -26,7 +26,22 @@ class GroqAlbumMatcher:
             self.client = None
             return
 
-        self.client = AsyncGroq(api_key=self.api_key)
+        # Set explicit timeout (60 seconds total, 15 seconds for connection)
+        # Increased for containerized environments with potential proxy latency
+        from groq import Timeout
+        import httpx
+
+        # Create httpx client without proxy (Groq shouldn't use RYM proxy)
+        http_client = httpx.AsyncClient(
+            proxy=None,  # Explicitly disable proxy
+            timeout=httpx.Timeout(60.0, connect=15.0)
+        )
+
+        self.client = AsyncGroq(
+            api_key=self.api_key,
+            http_client=http_client,
+            max_retries=2  # Retry up to 2 times on failures
+        )
         self.model = "llama-3.1-8b-instant"  # Fast, cheap model
 
     async def match_album(
@@ -47,12 +62,14 @@ class GroqAlbumMatcher:
         prompt = self._build_prompt(target_artist, target_album, candidates)
 
         try:
+            logger.debug(f"Calling Groq API with model: {self.model}")
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,  # Deterministic
                 max_tokens=10   # Just need a number
             )
+            logger.debug(f"Groq API response received")
 
             choice = response.choices[0].message.content.strip()
 
