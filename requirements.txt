@@ -19,3 +19,6 @@ lxml>=4.9.0
 
 # Retry and resilience
 tenacity>=8.0.0
+
+# LLM matching (optional - gracefully degrades if not installed)
+groq>=0.4.0

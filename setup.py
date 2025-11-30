@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='rym-metadata',
-    version='1.3.0',
+    version='1.4.0',
     description='RateYourMusic metadata scraper - standalone library and beets plugin',
     author='RYM Metadata',
     packages=find_packages(),
@@ -35,6 +35,9 @@ setup(
 
         # Optional: beets for plugin functionality
         'beets>=1.6.0',
+
+        # LLM matching (optional - gracefully degrades if not installed)
+        'groq>=0.4.0',
     ],
     classifiers=[
         'Development Status :: 4 - Beta',

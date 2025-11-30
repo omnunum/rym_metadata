@@ -81,9 +81,9 @@ class RYMMetadataScraper:
         """
         try:
             # Get album metadata, with artist fallback
-            genres, descriptors = await self.scraper.get_album_genres_and_descriptors(artist, album, year, album_type)
+            scraper_result = await self.scraper.get_album_metadata(artist, album, year, album_type)
 
-            if not genres:
+            if not scraper_result or not scraper_result.genres:
                 return None
 
             # Build URL for reference (try direct first)
@@ -92,10 +92,11 @@ class RYMMetadataScraper:
             return RYMMetadata(
                 artist=artist,
                 album=album,
-                genres=genres,
-                descriptors=descriptors,
+                genres=scraper_result.genres,
+                descriptors=scraper_result.descriptors,
                 url=url,
-                album_type=album_type
+                album_type=album_type,
+                release_date=scraper_result.release_date
             )
 
         except Exception as e:
@@ -113,23 +114,22 @@ class RYMMetadataScraper:
         """
         try:
             # Get artist metadata directly
-            result = await self.scraper.get_artist_genres_and_descriptors(artist)
+            scraper_result = await self.scraper.get_artist_metadata(artist)
 
-            if not result:
+            if not scraper_result or not scraper_result.genres:
                 return None
-
-            genres, descriptors = result
 
             # Build URL for reference (try direct first)
             url = self.scraper.build_artist_url(artist)
 
             return RYMMetadata(
                 artist=artist,
-                genres=genres,
-                descriptors=descriptors,
+                genres=scraper_result.genres,
+                descriptors=scraper_result.descriptors,
                 url=url,
                 album=None,
-                album_type=None
+                album_type=None,
+                release_date=scraper_result.release_date
             )
 
         except Exception as e:

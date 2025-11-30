@@ -79,6 +79,11 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
 
             # Direct file tagging
             'write_tags_to_files': False,  # Write genres/descriptors directly to audio files using mutagen
+            'write_release_date': True,    # Write release date to DATE tag
+
+            # LLM matching fallback (Groq API)
+            'groq_api_key': None,          # Groq API key for LLM-based matching
+            'enable_llm_fallback': True,   # Use LLM matching when fuzzy matching fails
         })
 
         # Create unified configuration
@@ -233,13 +238,16 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
                             genres = genre_data.get('genres', [])
                             descriptors = genre_data.get('descriptors', [])
                             rym_url = genre_data.get('url')
+                            release_date = genre_data.get('release_date')
 
                             # Write tags directly to audio files if configured
                             if self.rym_config.write_tags_to_files and not dry_run and (genres or descriptors):
                                 from rym.tagger import write_rym_metadata
                                 files_tagged = 0
+                                # Only write release date if config flag is enabled
+                                date_to_write = release_date if self.rym_config.write_release_date else None
                                 for item in album_obj.items():
-                                    if write_rym_metadata(item.path, genres, descriptors, rym_url):
+                                    if write_rym_metadata(item.path, genres, descriptors, rym_url, date_to_write):
                                         files_tagged += 1
                                 if files_tagged > 0:
                                     self._log.debug(f"Wrote RYM tags to {files_tagged} file(s)")
@@ -249,6 +257,8 @@ class RYMCamoufoxPlugin(plugins.BeetsPlugin):
                                 output_parts.append(f"Genres: {', '.join(genres)}")
                             if descriptors:
                                 output_parts.append(f"Descriptors: {', '.join(descriptors)}")
+                            if release_date:
+                                output_parts.append(f"Date: {release_date}")
 
                             if output_parts:
                                 ui.print_(f"[{i}/{len(albums_to_process)}] {album_obj.albumartist} - {album_obj.album}: {' | '.join(output_parts)}")

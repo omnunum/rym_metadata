@@ -15,7 +15,7 @@ try:
     from mutagen.mp4 import MP4
     from mutagen.oggvorbis import OggVorbis
     from mutagen.oggopus import OggOpus
-    from mutagen.id3 import ID3, TCON, TXXX
+    from mutagen.id3 import ID3, TCON, TXXX, TDRC
 except ImportError:
     raise ImportError(
         "mutagen is required for audio file tagging. "
@@ -158,14 +158,15 @@ def has_rym_metadata(file_path: str) -> bool:
         return False
 
 
-def write_rym_metadata(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None) -> bool:
-    """Write RYM genres and descriptors to an audio file.
+def write_rym_metadata(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None, release_date: Optional[str] = None) -> bool:
+    """Write RYM genres, descriptors, and release date to an audio file.
 
     Args:
         file_path: Path to audio file
         genres: List of genre strings
         descriptors: List of descriptor strings
         rym_url: RYM page URL (written to RYM_URL tag to mark file as processed)
+        release_date: Release date in ISO 8601 format (YYYY-MM-DD)
 
     Returns:
         True if successful, False otherwise
@@ -180,23 +181,23 @@ def write_rym_metadata(file_path: str, genres: List[str], descriptors: List[str]
 
         # Handle FLAC files (Vorbis Comments)
         if file_ext == '.flac':
-            return _write_flac_tags(file_path, genres, descriptors, rym_url)
+            return _write_flac_tags(file_path, genres, descriptors, rym_url, release_date)
 
         # Handle MP3 files (ID3 tags)
         elif file_ext == '.mp3':
-            return _write_mp3_tags(file_path, genres, descriptors, rym_url)
+            return _write_mp3_tags(file_path, genres, descriptors, rym_url, release_date)
 
         # Handle M4A/MP4 files (MP4 tags)
         elif file_ext in {'.m4a', '.mp4'}:
-            return _write_mp4_tags(file_path, genres, descriptors, rym_url)
+            return _write_mp4_tags(file_path, genres, descriptors, rym_url, release_date)
 
         # Handle OGG Vorbis files
         elif file_ext == '.ogg':
-            return _write_ogg_tags(file_path, genres, descriptors, rym_url)
+            return _write_ogg_tags(file_path, genres, descriptors, rym_url, release_date)
 
         # Handle Opus files
         elif file_ext == '.opus':
-            return _write_opus_tags(file_path, genres, descriptors, rym_url)
+            return _write_opus_tags(file_path, genres, descriptors, rym_url, release_date)
 
         else:
             logger.warning(f"Unsupported file format: {file_ext}")
@@ -207,7 +208,7 @@ def write_rym_metadata(file_path: str, genres: List[str], descriptors: List[str]
         return False
 
 
-def _write_flac_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None) -> bool:
+def _write_flac_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None, release_date: Optional[str] = None) -> bool:
     """Write tags to FLAC file (Vorbis comments)."""
     try:
         audio = FLAC(file_path)
@@ -219,6 +220,10 @@ def _write_flac_tags(file_path: str, genres: List[str], descriptors: List[str], 
         if descriptors:
             # Use custom RYM_DESCRIPTOR tag (Vorbis comments allow arbitrary tags)
             audio['RYM_DESCRIPTOR'] = descriptors
+
+        if release_date:
+            # Write release date to DATE tag
+            audio['DATE'] = release_date
 
         # Always write RYM_URL tag to mark as processed and provide reference
         if rym_url:
@@ -233,7 +238,7 @@ def _write_flac_tags(file_path: str, genres: List[str], descriptors: List[str], 
         return False
 
 
-def _write_mp3_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None) -> bool:
+def _write_mp3_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None, release_date: Optional[str] = None) -> bool:
     """Write tags to MP3 file (ID3v2)."""
     try:
         # Load or create ID3 tags
@@ -253,6 +258,10 @@ def _write_mp3_tags(file_path: str, genres: List[str], descriptors: List[str], r
             # ID3v2: Use TXXX frame for custom descriptor field
             audio.tags.add(TXXX(encoding=3, desc='RYM_DESCRIPTOR', text=descriptors))
 
+        if release_date:
+            # ID3v2: TDRC frame for release date
+            audio.tags.add(TDRC(encoding=3, text=release_date))
+
         # Always write RYM_URL tag to mark as processed and provide reference
         if rym_url:
             audio.tags.add(TXXX(encoding=3, desc='RYM_URL', text=rym_url))
@@ -266,7 +275,7 @@ def _write_mp3_tags(file_path: str, genres: List[str], descriptors: List[str], r
         return False
 
 
-def _write_mp4_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None) -> bool:
+def _write_mp4_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None, release_date: Optional[str] = None) -> bool:
     """Write tags to MP4/M4A file."""
     try:
         audio = MP4(file_path)
@@ -282,6 +291,10 @@ def _write_mp4_tags(file_path: str, genres: List[str], descriptors: List[str], r
                 desc.encode('utf-8') for desc in descriptors
             ]
 
+        if release_date:
+            # MP4: Use \xa9day atom for release date
+            audio['\xa9day'] = release_date
+
         # Always write RYM_URL tag to mark as processed and provide reference
         if rym_url:
             audio['----:com.apple.iTunes:RYM_URL'] = [rym_url.encode('utf-8')]
@@ -295,7 +308,7 @@ def _write_mp4_tags(file_path: str, genres: List[str], descriptors: List[str], r
         return False
 
 
-def _write_ogg_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None) -> bool:
+def _write_ogg_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None, release_date: Optional[str] = None) -> bool:
     """Write tags to OGG Vorbis file."""
     try:
         audio = OggVorbis(file_path)
@@ -305,6 +318,9 @@ def _write_ogg_tags(file_path: str, genres: List[str], descriptors: List[str], r
 
         if descriptors:
             audio['RYM_DESCRIPTOR'] = descriptors
+
+        if release_date:
+            audio['DATE'] = release_date
 
         # Always write RYM_URL tag to mark as processed and provide reference
         if rym_url:
@@ -319,7 +335,7 @@ def _write_ogg_tags(file_path: str, genres: List[str], descriptors: List[str], r
         return False
 
 
-def _write_opus_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None) -> bool:
+def _write_opus_tags(file_path: str, genres: List[str], descriptors: List[str], rym_url: Optional[str] = None, release_date: Optional[str] = None) -> bool:
     """Write tags to Opus file."""
     try:
         audio = OggOpus(file_path)
@@ -329,6 +345,9 @@ def _write_opus_tags(file_path: str, genres: List[str], descriptors: List[str], 
 
         if descriptors:
             audio['RYM_DESCRIPTOR'] = descriptors
+
+        if release_date:
+            audio['DATE'] = release_date
 
         # Always write RYM_URL tag to mark as processed and provide reference
         if rym_url:

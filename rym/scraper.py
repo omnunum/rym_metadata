@@ -14,12 +14,13 @@ from bs4 import BeautifulSoup
 from camoufox import AsyncCamoufox
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from rym.dataclasses import DiscographyCandidate
+from rym.dataclasses import DiscographyCandidate, RYMConfig, ScraperResult
 
 from .content_cache_manager import ContentCacheManager
 from .browser import BrowserManager
 from .text_utils import normalize_text
 from .genre_manager import GenreHierarchyManager
+from .llm_matcher import GroqAlbumMatcher
 
 
 def _deduplicate_list(items: List[str]) -> List[str]:
@@ -96,6 +97,12 @@ class RYMScraper:
                 str(self.cache_manager.cache_dir),
                 self.config.genre_cache_expiry_days
             )
+
+        # LLM matching fallback - initialize if enabled and API key available
+        self.llm_matcher = None
+        self.current_artist = None  # Track current artist for LLM matching
+        if self.config.enable_llm_fallback:
+            self.llm_matcher = GroqAlbumMatcher(api_key=self.config.groq_api_key)
 
     async def __aenter__(self):
         """Async context manager entry - start browser session."""
@@ -240,7 +247,7 @@ class RYMScraper:
         return result
 
 
-    async def get_album_genres_and_descriptors(self, artist: str, album: str, year: Optional[int] = None, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> Optional[tuple[list[str], list[str]]]:
+    async def get_album_metadata(self, artist: str, album: str, year: Optional[int] = None, album_type: Literal["album", "single", "ep", "compilation"] = "album") -> Optional[ScraperResult]:
         """Get genre and descriptor information for a specific album.
 
         Args:
@@ -258,27 +265,30 @@ class RYMScraper:
             try:
                 self.logger.info(f"Searching for album: {artist} - {album}")
 
+                # Track current artist for LLM matching
+                self.current_artist = artist
+
                 # Check release content cache first
                 if self.cache_manager:
                     cached_html = self.cache_manager.get_cached_content("release", artist, album)
                     if cached_html:
-                        genres, descriptors = self._extract_genres_from_html(cached_html)
-                        if genres or descriptors:
-                            return genres, descriptors
+                        result = self._extract_metadata_from_html(cached_html)
+                        if result.genres or result.descriptors:
+                            return result
 
                 # Try direct album URL
                 direct_url = self.build_direct_url(artist, album, album_type)
                 self.logger.debug(f"Trying direct album URL: {direct_url}")
 
                 html = await self.navigate_page_with_rate_limiting(direct_url, page)
-                genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
+                result = self._extract_metadata_from_html(html) if html else ScraperResult([], [], None)
 
                 # Cache successful album result
-                if html and (genres or descriptors) and self.cache_manager:
+                if html and (result.genres or result.descriptors) and self.cache_manager:
                     self.cache_manager.save_content("release", artist, html, album)
 
                 # If direct URL fails, try artist ID cache + discography search
-                if not genres:
+                if not result.genres:
                     self.logger.info(f"Direct album URL failed, checking artist ID cache for {artist}")
 
                     cached_artist_id = None
@@ -292,10 +302,10 @@ class RYMScraper:
 
                         if album_url:
                             html = await self.navigate_page_with_rate_limiting(album_url, page)
-                            genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
+                            result = self._extract_metadata_from_html(html) if html else ScraperResult([], [], None)
 
                             # Cache successful result
-                            if html and (genres or descriptors) and self.cache_manager:
+                            if html and (result.genres or result.descriptors) and self.cache_manager:
                                 self.cache_manager.save_content("release", artist, html, album)
                         else:
                             # Artist exists (we have cached ID) but album not found in discography
@@ -313,27 +323,27 @@ class RYMScraper:
 
                             if album_url:
                                 html = await self.navigate_page_with_rate_limiting(album_url, page)
-                                genres, descriptors = self._extract_genres_from_html(html) if html else ([], [])
+                                result = self._extract_metadata_from_html(html) if html else ScraperResult([], [], None)
 
                                 # Cache successful result
-                                if html and (genres or descriptors) and self.cache_manager:
+                                if html and (result.genres or result.descriptors) and self.cache_manager:
                                     self.cache_manager.save_content("release", artist, html, album)
 
                 # Return results or None
-                if genres or descriptors:
-                    return genres, descriptors
+                if result.genres or result.descriptors:
+                    return result
                 else:
                     self.logger.info(f"No genres found for {artist} - {album}")
-                    return None, None
+                    return None
 
             except Exception as e:
                 self.logger.error(f"Error processing {artist} - {album}: {e}")
-                return None, None
+                return None
             finally:
                 # Close page to prevent memory leaks during long sessions
                 await page.close()
 
-    async def get_artist_genres_and_descriptors(self, artist: str) -> Optional[tuple[list[str], list[str]]]:
+    async def get_artist_metadata(self, artist: str) -> Optional[ScraperResult]:
         """Get genre and descriptor information for a specific artist.
 
         Args:
@@ -352,23 +362,23 @@ class RYMScraper:
                 if self.cache_manager:
                     cached_html = self.cache_manager.get_cached_content("artist", artist)
                     if cached_html:
-                        genres, descriptors = self._extract_genres_from_html(cached_html, "artist")
-                        if genres or descriptors:
-                            return genres, descriptors
+                        result = self._extract_metadata_from_html(cached_html, "artist")
+                        if result.genres or result.descriptors:
+                            return result
 
                 # Try direct artist URL
                 direct_url = self.build_artist_url(artist)
                 self.logger.debug(f"Trying direct artist URL: {direct_url}")
 
                 html = await self.navigate_page_with_rate_limiting(direct_url, page)
-                genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
+                result = self._extract_metadata_from_html(html, "artist") if html else ScraperResult([], [], None)
 
                 # Cache successful artist result
-                if html and (genres or descriptors) and self.cache_manager:
+                if html and (result.genres or result.descriptors) and self.cache_manager:
                     self.cache_manager.save_content("artist", artist, html)
 
                 # If direct artist URL fails, try artist search
-                if not genres:
+                if not result.genres:
                     self.logger.debug(f"Direct artist URL failed, searching for artist {artist}")
                     search_url = self.build_artist_search_url(artist)
 
@@ -376,22 +386,22 @@ class RYMScraper:
 
                     if artist_url:
                         html = await self.navigate_page_with_rate_limiting(artist_url, page)
-                        genres, descriptors = self._extract_genres_from_html(html, "artist") if html else ([], [])
+                        result = self._extract_metadata_from_html(html, "artist") if html else ScraperResult([], [], None)
 
                         # Cache successful result
-                        if html and (genres or descriptors) and self.cache_manager:
+                        if html and (result.genres or result.descriptors) and self.cache_manager:
                             self.cache_manager.save_content("artist", artist, html)
 
                 # Return results or None
-                if genres or descriptors:
-                    return genres, descriptors
+                if result.genres or result.descriptors:
+                    return result
                 else:
                     self.logger.info(f"No genres found for artist {artist}")
-                    return None, None
+                    return None
 
             except Exception as e:
                 self.logger.error(f"Error processing artist {artist}: {e}")
-                return None, None
+                return None
             finally:
                 # Close page to prevent memory leaks during long sessions
                 await page.close()
@@ -410,21 +420,24 @@ class RYMScraper:
             album_type = getattr(album_obj, 'albumtype', 'album')
 
             # Get genre data for album, with artist fallback
-            result = await self.get_album_genres_and_descriptors(artist, album_name, year)
+            result = await self.get_album_metadata(artist, album_name, year)
             rym_url = None
+            release_date = None
             if result:
                 # Build URL for album
                 rym_url = self.build_direct_url(artist, album_name, album_type)
             else:
                 # Fall back to artist genres if album search fails
-                result = await self.get_artist_genres_and_descriptors(artist)
+                result = await self.get_artist_metadata(artist)
                 if result:
                     rym_url = self.build_artist_url(artist)
 
             if not result:
                 return None
 
-            genres, descriptors = result
+            genres = result.genres
+            descriptors = result.descriptors
+            release_date = result.release_date
 
             if (genres or descriptors) and not dry_run:
                 # Store genres and descriptors in the album (beets-specific)
@@ -435,7 +448,7 @@ class RYMScraper:
                 if hasattr(album_obj, 'store'):
                     album_obj.store()
 
-            return album_obj, {'genres': genres, 'descriptors': descriptors, 'url': rym_url}
+            return album_obj, {'genres': genres, 'descriptors': descriptors, 'url': rym_url, 'release_date': release_date}
 
         except Exception as e:
             artist = getattr(album_obj, 'albumartist', 'Unknown')
@@ -1142,7 +1155,7 @@ class RYMScraper:
         return final_score
 
 
-    def _score_discography_candidates(self, candidates: List[DiscographyCandidate], target_album: str, target_year: Optional[int] = None) -> Optional[str]:
+    async def _score_discography_candidates(self, candidates: List[DiscographyCandidate], target_album: str, target_year: Optional[int] = None) -> Optional[str]:
         """Score discography candidates and return the best match URL.
 
         Note: Uses Phase 2 (moderate) normalization via _normalize_album_name()
@@ -1184,7 +1197,28 @@ class RYMScraper:
                 self.logger.info(f"Year difference: target={target_year}, candidate={best_candidate.year} (diff={year_diff}) - possible reissue")
 
         if best_score < threshold:
-            self.logger.info(f"Best discography match '{best_candidate.album}' score {best_score:.3f} below threshold {threshold:.3f}")
+            self.logger.info(f"Best fuzzy match '{best_candidate.album}' score {best_score:.3f} below threshold {threshold:.3f}")
+
+            # Try LLM matching as fallback
+            if self.llm_matcher and self.current_artist:
+                self.logger.info("Trying LLM-based matching as fallback...")
+                llm_url = await self.llm_matcher.match_album(
+                    target_artist=self.current_artist,
+                    target_album=target_album,
+                    candidates=[
+                        {"album": c.album, "year": c.year, "url": c.url}
+                        for score, c in scored_candidates[:10]  # Top 10 only
+                    ]
+                )
+                if llm_url:
+                    self.logger.info(f"LLM selected: {llm_url}")
+                    # Return full URL if needed
+                    if llm_url.startswith('/'):
+                        return f"{self.config.base_url}{llm_url}"
+                    return llm_url
+                else:
+                    self.logger.info("LLM found no suitable match")
+
             return None
 
         self.logger.info(f"Selected discography match: '{best_candidate.album}' ({best_candidate.year}) with score {best_score:.3f}")
@@ -1215,7 +1249,7 @@ class RYMScraper:
 
             # Score candidates and return best match
             if candidates:
-                return self._score_discography_candidates(candidates, album, year)
+                return await self._score_discography_candidates(candidates, album, year)
             else:
                 self.logger.info("Discography search returned no results")
                 return None
@@ -1304,7 +1338,7 @@ class RYMScraper:
 
             visible_candidates = self._parse_visible_discography(html)
             if visible_candidates:
-                match_url = self._score_discography_candidates(visible_candidates, album, year)
+                match_url = await self._score_discography_candidates(visible_candidates, album, year)
                 if match_url:
                     self.logger.info(f"Tier 1 SUCCESS: Found match in visible discography")
                     return match_url
@@ -1314,7 +1348,7 @@ class RYMScraper:
             self.logger.info("Tier 2: Trying FilterDiscography POST API")
             post_candidates = await self._search_discography_via_post(page, artist_id, album)
             if post_candidates:
-                match_url = self._score_discography_candidates(post_candidates, album, year)
+                match_url = await self._score_discography_candidates(post_candidates, album, year)
                 if match_url:
                     self.logger.info(f"Tier 2 SUCCESS: Found match via POST API")
                     return match_url
@@ -1345,7 +1379,7 @@ class RYMScraper:
                 )
 
                 if expanded_candidates:
-                    match_url = self._score_discography_candidates(expanded_candidates, album, year)
+                    match_url = await self._score_discography_candidates(expanded_candidates, album, year)
                     if match_url:
                         self.logger.info(f"Tier 3 SUCCESS: Found match in expanded section '{section_type}'")
                         return match_url
@@ -1362,16 +1396,67 @@ class RYMScraper:
             self.logger.error(f"Error during discography search: {e}")
             return None
 
-    def _parse_album_genres_and_descriptors(self, soup: BeautifulSoup) -> tuple[list[str], list[str]]:
-        """Extract genres and descriptors from album page HTML structure."""
+    def _parse_release_date(self, soup: BeautifulSoup) -> Optional[str]:
+        """Extract release date from album page HTML.
+
+        HTML structure: <tr><th class="info_hdr">Released</th><td colspan="2">16 October 2001</td></tr>
+
+        Returns:
+            Release date in ISO 8601 format (YYYY-MM-DD), or None if not found
+        """
+        try:
+            from datetime import datetime
+            import re
+
+            # Find all table rows
+            rows = soup.find_all('tr')
+            for row in rows:
+                th = row.find('th', class_='info_hdr')
+                if th and 'released' in th.get_text(strip=True).lower():
+                    td = row.find('td', colspan='2')
+                    if td:
+                        # Extract text and clean HTML tags
+                        # Use separator=' ' to ensure spaces between nested tags (e.g., <a><b>2001</b></a>)
+                        date_text = td.get_text(separator=' ', strip=True)
+
+                        # Clean the text (remove extra whitespace)
+                        date_text = ' '.join(date_text.split())
+
+                        # Try full date format: "DD Month YYYY"
+                        try:
+                            parsed = datetime.strptime(date_text, '%d %B %Y')
+                            return parsed.strftime('%Y-%m-%d')
+                        except ValueError:
+                            pass
+
+                        # Try year-only format - extract 4-digit year
+                        year_match = re.search(r'\b(19\d{2}|20\d{2})\b', date_text)
+                        if year_match:
+                            year = year_match.group(1)
+                            # Use January 1st for year-only dates
+                            return f"{year}-01-01"
+
+                        self.logger.warning(f"Could not parse date: '{date_text}'")
+                        return None
+
+            self.logger.debug("No release date found in HTML")
+            return None
+
+        except Exception as e:
+            self.logger.warning(f"Error parsing release date: {e}")
+            return None
+
+    def _parse_album_metadata(self, soup: BeautifulSoup) -> ScraperResult:
+        """Extract genres, descriptors, and release date from album page HTML structure."""
         genres = []
         descriptors = []
+        release_date = None
 
         # Fail fast: Check if this looks like a valid album page
         genre_row = soup.find('tr', class_='release_genres')
         if not genre_row:
             # No release_genres row means this isn't a valid album page
-            return genres, descriptors
+            return ScraperResult(genres, descriptors, release_date)
 
         # Extract all genres from the release_genres row (both primary and secondary)
         genre_links = genre_row.find_all('a', class_='genre')
@@ -1390,12 +1475,16 @@ class RYMScraper:
                 if descriptor:
                     descriptors.append(descriptor)
 
-        return genres, descriptors
+        # Extract release date
+        release_date = self._parse_release_date(soup)
 
-    def _parse_artist_genres_and_descriptors(self, soup: BeautifulSoup) -> tuple[list[str], list[str]]:
-        """Extract genres and descriptors from artist page HTML structure."""
+        return ScraperResult(genres, descriptors, release_date)
+
+    def _parse_artist_metadata(self, soup: BeautifulSoup) -> ScraperResult:
+        """Extract genres, descriptors, and release date from artist page HTML structure."""
         genres = []
         descriptors = []
+        release_date = None  # Artists don't have release dates
 
         # Look for genres in artist_info_main class
         # Find the "Genres" header and extract from the following info_content div
@@ -1415,30 +1504,34 @@ class RYMScraper:
                             genres.append(genre_text)
                     break
 
-        return genres, descriptors
+        return ScraperResult(genres, descriptors, release_date)
 
-    def _extract_genres_from_html(self, html: str, content_type: Literal["album", "artist"] = "album") -> tuple[list[str], list[str]]:
-        """Extract genre information and descriptors from RYM page HTML."""
+    def _extract_metadata_from_html(self, html: str, content_type: Literal["album", "artist"] = "album") -> ScraperResult:
+        """Extract genre information, descriptors, and release date from RYM page HTML."""
         if not html:
-            return [], []
+            return ScraperResult([], [], None)
 
         try:
             soup = BeautifulSoup(html, 'html.parser')
 
             # Use appropriate parser based on content type
             if content_type == "album":
-                genres, descriptors = self._parse_album_genres_and_descriptors(soup)
+                result = self._parse_album_metadata(soup)
             elif content_type == "artist":
-                genres, descriptors = self._parse_artist_genres_and_descriptors(soup)
+                result = self._parse_artist_metadata(soup)
             else:
                 self.logger.error(f"Unknown content_type: {content_type}")
-                return [], []
+                return ScraperResult([], [], None)
         except (AttributeError, ValueError, TypeError) as e:
             self.logger.error(f"HTML parsing error: {e}")
-            return [], []
+            return ScraperResult([], [], None)
         except Exception as e:
-            self.logger.error(f"Unexpected error extracting genres from HTML: {e}")
-            return [], []
+            self.logger.error(f"Unexpected error extracting metadata from HTML: {e}")
+            return ScraperResult([], [], None)
+
+        genres = result.genres
+        descriptors = result.descriptors
+        release_date = result.release_date
 
         # Expand genres with parent genres if enabled
         final_genres = _deduplicate_list(genres)
@@ -1449,7 +1542,7 @@ class RYMScraper:
                     self.logger.debug("Genre manager not loaded, attempting to load hierarchy data")
                     if not self.genre_manager.load_hierarchy_data():
                         self.logger.warning("Could not load genre hierarchy data, parent genre expansion disabled")
-                        return final_genres, _deduplicate_list(descriptors)
+                        return ScraperResult(final_genres, _deduplicate_list(descriptors), release_date)
 
                 expanded_genres = self.genre_manager.expand_genres_with_parents(final_genres)
                 original_count = len(final_genres)
@@ -1471,7 +1564,7 @@ class RYMScraper:
                 self.logger.warning(f"Unexpected error during genre expansion: {e}")
                 # Continue with original genres if expansion fails
 
-        return final_genres, _deduplicate_list(descriptors)
+        return ScraperResult(final_genres, _deduplicate_list(descriptors), release_date)
 
 
 

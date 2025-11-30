@@ -53,6 +53,7 @@ Environment Variables:
   PROXY_PORT      Proxy server port
   PROXY_USERNAME  Proxy authentication username
   PROXY_PASSWORD  Proxy authentication password
+  GROQ_API_KEY    Groq API key for LLM-based album matching fallback
         """
     )
 
@@ -155,6 +156,9 @@ def create_config_from_args(args) -> RYMConfig:
         proxy_host, proxy_port, proxy_username, proxy_password
     ])
 
+    # Get Groq API key for LLM matching
+    groq_api_key = os.environ.get('GROQ_API_KEY')
+
     return RYMConfig(
         proxy_enabled=proxy_enabled,
         proxy_host=proxy_host,
@@ -164,6 +168,7 @@ def create_config_from_args(args) -> RYMConfig:
         cache_enabled=True,
         cache_dir='.rym_cache',
         headless=True,
+        groq_api_key=groq_api_key,
     )
 
 
@@ -247,12 +252,15 @@ async def process_folder(folder: str, config: RYMConfig, force: bool = False,
                 genres = rym_metadata.genres
                 descriptors = rym_metadata.descriptors
                 rym_url = rym_metadata.url
+                release_date = rym_metadata.release_date
 
                 # Display what was found
                 if genres:
                     print(f"  Genres: {', '.join(genres)}")
                 if descriptors:
                     print(f"  Descriptors: {', '.join(descriptors)}")
+                if release_date:
+                    print(f"  Release Date: {release_date}")
                 if rym_url:
                     print(f"  URL: {rym_url}")
 
@@ -265,9 +273,11 @@ async def process_folder(folder: str, config: RYMConfig, force: bool = False,
                 if not dry_run:
                     print(f"  Writing tags to {len(file_metadatas)} file(s)...")
                     success_count = 0
+                    # Only write release date if config flag is enabled
+                    date_to_write = release_date if config.write_release_date else None
                     for file_metadata in file_metadatas:
                         file_path = file_metadata['path']
-                        if write_rym_metadata(file_path, genres, descriptors, rym_url):
+                        if write_rym_metadata(file_path, genres, descriptors, rym_url, date_to_write):
                             success_count += 1
 
                     if success_count == len(file_metadatas):

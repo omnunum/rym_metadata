@@ -55,8 +55,13 @@ class RYMConfig:
     expand_parent_genres: bool = True  # Automatically add parent genres to album metadata
     genre_cache_expiry_days: int = 30  # How long to cache genre hierarchy data (0 = never expire)
 
-    # Direct file tagging (for beets plugin)
-    write_tags_to_files: bool = False  # Write genres/descriptors directly to audio files using mutagen
+    # Direct file tagging
+    write_tags_to_files: bool = True  # Write genres/descriptors directly to audio files using mutagen (default True for CLI, False for beets)
+    write_release_date: bool = True  # Write release date to DATE tag
+
+    # LLM matching fallback (Groq API)
+    groq_api_key: Optional[str] = None  # Groq API key for LLM-based matching
+    enable_llm_fallback: bool = True  # Use LLM matching when fuzzy matching fails
 
     @classmethod
     def from_beets_config(cls, config) -> 'RYMConfig':
@@ -115,6 +120,11 @@ class RYMConfig:
 
             # Direct file tagging
             write_tags_to_files=config['write_tags_to_files'].get(False),
+            write_release_date=config['write_release_date'].get(True),
+
+            # LLM matching fallback
+            groq_api_key=config['groq_api_key'].get(),
+            enable_llm_fallback=config['enable_llm_fallback'].get(True),
         )
 
     @property
@@ -146,6 +156,14 @@ class RYMConfig:
 
 
 @dataclass(repr=True)
+class ScraperResult:
+    """Container for scraper results from HTML parsing."""
+    genres: List[str]
+    descriptors: List[str]
+    release_date: Optional[str] = None  # ISO 8601 format (YYYY-MM-DD)
+
+
+@dataclass(repr=True)
 class RYMMetadata:
     """Container for RYM metadata (artist or album)."""
     artist: str
@@ -154,6 +172,7 @@ class RYMMetadata:
     url: Optional[str] = None
     album: Optional[str] = None  # None for artist-only metadata
     album_type: Optional[str] = None  # "album", "single", "ep", "compilation"
+    release_date: Optional[str] = None  # ISO 8601 format (YYYY-MM-DD)
 
 
 @dataclass(repr=True)

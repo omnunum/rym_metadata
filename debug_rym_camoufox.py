@@ -26,7 +26,7 @@ async def debug_album_async():
     # Test with a well-known album
     artist = "The Desert Sessions"
     album = "Desert Sessions 7 & 8"
-    year = 2023
+    year = 2001
 
     try:
         # Use the API with proxy-aware configuration
@@ -38,6 +38,7 @@ async def debug_album_async():
                 print(f"✓ Found album data:")
                 print(f"  Artist: {album_data.artist}")
                 print(f"  Album: {album_data.album}")
+                print(f"  Release Date: {album_data.release_date}")
                 print(f"  Genres: {album_data.genres}")
                 print(f"  Descriptors: {album_data.descriptors}")
                 print(f"  URL: {album_data.url}")
