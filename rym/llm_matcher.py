@@ -42,7 +42,7 @@ class GroqAlbumMatcher:
             http_client=http_client,
             max_retries=2  # Retry up to 2 times on failures
         )
-        self.model = "llama-3.1-8b-instant"  # Fast, cheap model
+        self.model = "llama-3.3-70b-versatile"  # More capable model for better matching
 
     async def match_album(
         self,
@@ -125,22 +125,28 @@ Possible matches from RateYourMusic:
             prompt += f"{i}. {cand['album']}{year_str}\n"
 
         prompt += """
-Which number is the best match? Consider:
-- The list order does NOT indicate match quality - evaluate each option independently
-- Album titles may use different formats and numbering conventions
-- Match ALL volume numbers mentioned, not just the last one
-- Artists may prepend their name to album titles
-- Ignore year mismatches (metadata years are often wrong)
+Which number is the best match?
 
-Examples of valid matches:
-- "Volumes 7 & 8" matches "Desert Sessions 7 & 8" or "Vol VII/VIII" (both volumes present)
-- "Volumes 7 & 8" does NOT match "Vol VIII" alone (missing Vol VII)
-- "Volumes 1 & 2" matches "Vols. I/II" or "The Sessions 1 & 2"
-- "Greatest Hits" matches "The Beatles: Greatest Hits" (artist name prepended)
+MATCHING RULES:
+1. For albums with multiple volumes (e.g., "Volumes X & Y"), BOTH volume numbers must be present in the title
+   - Roman numerals (I, II, III, IV, V, etc.) are equivalent to Arabic numerals (1, 2, 3, 4, 5, etc.)
+   - A slash "/" or ampersand "&" can separate the volumes
+   - Examples of valid multi-volume matches:
+     * "Volumes 7 & 8" → "Vol VII/VIII" ✓ (both 7 and 8)
+     * "Volumes 7 & 8" → "Desert Sessions 7 & 8" ✓ (both 7 and 8)
+     * "Volumes 1 & 2" → "Vol I/II" ✓ (both 1 and 2)
+   - Examples of INVALID matches (missing volumes):
+     * "Volumes 7 & 8" → "Vol VIII" ✗ (missing 7)
+     * "Volumes 7 & 8" → "Vol VII" ✗ (missing 8)
 
-CRITICAL: Respond with ONLY a single number (1-10) or the word "none".
-Do NOT include the album name, year, or any other text. Just the number.
-Examples of valid responses: "2" or "7" or "none"
-Examples of INVALID responses: "2. Album Name" or "I think it's 2" """
+2. The list order does NOT indicate match quality - evaluate each option independently
+
+3. Ignore year differences (metadata years are often wrong)
+
+4. Artists may prepend their name to album titles
+
+CRITICAL: Respond with ONLY the number (1-10) or "none". No other text.
+Examples: "2" or "7" or "none"
+NOT: "2. Album Name" or "I think 2" """
 
         return prompt

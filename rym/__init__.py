@@ -1,6 +1,6 @@
 """RYM metadata scraping modules."""
 
-__version__ = "1.4.3"
+__version__ = "1.4.4"
 
 # Core standalone functionality (for streamrip and other integrations)
 from .dataclasses import RYMConfig, RYMMetadata
