@@ -1202,13 +1202,16 @@ class RYMScraper:
             # Try LLM matching as fallback
             if self.llm_matcher and self.current_artist:
                 self.logger.info("Trying LLM-based matching as fallback...")
+                # Pass top 10 candidates to LLM (logging happens in llm_matcher)
+                llm_candidates = [
+                    {"album": c.album, "year": c.year, "url": c.url}
+                    for _, c in scored_candidates[:10]
+                ]
+
                 llm_url = await self.llm_matcher.match_album(
                     target_artist=self.current_artist,
                     target_album=target_album,
-                    candidates=[
-                        {"album": c.album, "year": c.year, "url": c.url}
-                        for score, c in scored_candidates[:10]  # Top 10 only
-                    ]
+                    candidates=llm_candidates
                 )
                 if llm_url:
                     self.logger.info(f"LLM selected: {llm_url}")

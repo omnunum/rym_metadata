@@ -61,13 +61,20 @@ class GroqAlbumMatcher:
         # Build prompt
         prompt = self._build_prompt(target_artist, target_album, candidates)
 
+        # Log the candidates being sent to LLM
+        logger.info(f"LLM input - Target: {target_artist} - {target_album}")
+        for i, cand in enumerate(candidates[:10], 1):
+            year_str = f" ({cand['year']})" if cand.get('year') else " (no year)"
+            logger.info(f"  LLM candidate #{i}: {cand['album']}{year_str}")
+
         try:
             logger.debug(f"Calling Groq API with model: {self.model}")
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,  # Deterministic
-                max_tokens=10   # Just need a number
+                max_tokens=10,  # Just need a number
+                seed=42  # Ensure reproducibility
             )
             logger.debug(f"Groq API response received")
 
@@ -119,6 +126,7 @@ Possible matches from RateYourMusic:
 
         prompt += """
 Which number is the best match? Consider:
+- The list order does NOT indicate match quality - evaluate each option independently
 - Album titles may use different formats and numbering conventions
 - Match ALL volume numbers mentioned, not just the last one
 - Artists may prepend their name to album titles
