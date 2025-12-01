@@ -74,19 +74,26 @@ class GroqAlbumMatcher:
             choice = response.choices[0].message.content.strip()
 
             # Parse response (expecting just a number or "none")
-            if choice.lower() == "none":
+            # Extract first number if LLM included extra text
+            if choice.lower().startswith("none"):
                 logger.info("LLM found no suitable match")
                 return None
 
             try:
+                # Try to extract just the number (handle cases like "2. Album Name")
+                import re
+                match = re.search(r'^\d+', choice)
+                if match:
+                    choice = match.group()
+
                 idx = int(choice) - 1  # Convert 1-indexed to 0-indexed
                 if 0 <= idx < len(candidates):
                     matched_album = candidates[idx]["album"]
-                    logger.info(f"LLM matched to candidate #{choice}: {matched_album}")
+                    logger.info(f"LLM matched to candidate #{int(choice)}: {matched_album}")
                     return candidates[idx]["url"]
                 else:
                     logger.warning(f"LLM returned invalid index: {choice}")
-            except ValueError:
+            except (ValueError, AttributeError):
                 logger.warning(f"LLM returned non-numeric response: {choice}")
 
             return None
@@ -112,10 +119,20 @@ Possible matches from RateYourMusic:
 
         prompt += """
 Which number is the best match? Consider:
-- Album titles may use different formats (e.g., "Volumes 7 & 8" = "Desert Sessions 7 & 8")
+- Album titles may use different formats and numbering conventions
+- Match ALL volume numbers mentioned, not just the last one
 - Artists may prepend their name to album titles
 - Ignore year mismatches (metadata years are often wrong)
 
-Respond with ONLY the number (1-10) of the best match, or "none" if no good match exists."""
+Examples of valid matches:
+- "Volumes 7 & 8" matches "Desert Sessions 7 & 8" or "Vol VII/VIII" (both volumes present)
+- "Volumes 7 & 8" does NOT match "Vol VIII" alone (missing Vol VII)
+- "Volumes 1 & 2" matches "Vols. I/II" or "The Sessions 1 & 2"
+- "Greatest Hits" matches "The Beatles: Greatest Hits" (artist name prepended)
+
+CRITICAL: Respond with ONLY a single number (1-10) or the word "none".
+Do NOT include the album name, year, or any other text. Just the number.
+Examples of valid responses: "2" or "7" or "none"
+Examples of INVALID responses: "2. Album Name" or "I think it's 2" """
 
         return prompt
